@@ -143,6 +143,15 @@ TaskHandle_t taskDisplayHandle = NULL;
 TaskHandle_t taskServeHandle = NULL;
 TaskHandle_t taskRefreshSongHandle = NULL;
 
+bool detect_reset()
+{
+    pinMode(PIN_RESET_SETTINGS, INPUT_PULLUP);
+    delay(10);
+    bool reset = digitalRead(PIN_RESET_SETTINGS) == LOW;
+    pinMode(PIN_RESET_SETTINGS, INPUT);
+    return reset;
+}
+
 void displayClock(bool withIp = false)
 {
     timeClient.update();
@@ -285,39 +294,39 @@ void displaySong()
     // delete[] lines;
 }
 
-void printUsages()
-{
-    // print usages of all tasks
-    log_d("================================================================================");
+// void printUsages()
+// {
+//     // print usages of all tasks
+//     log_d("================================================================================");
 
-    auto displayTaskUsage = uxTaskGetStackHighWaterMark(taskDisplayHandle);
-    auto serveTaskUsage = uxTaskGetStackHighWaterMark(taskServeHandle);
-    auto refreshSongTaskUsage = uxTaskGetStackHighWaterMark(taskRefreshSongHandle);
-    auto loopTaskUsage = uxTaskGetStackHighWaterMark(NULL);
+//     auto displayTaskUsage = uxTaskGetStackHighWaterMark(taskDisplayHandle);
+//     auto serveTaskUsage = uxTaskGetStackHighWaterMark(taskServeHandle);
+//     auto refreshSongTaskUsage = uxTaskGetStackHighWaterMark(taskRefreshSongHandle);
+//     auto loopTaskUsage = uxTaskGetStackHighWaterMark(NULL);
 
-    log_d("Display task usage:      [%.2f%%]", (float)(STACK_SIZE_DISPLAY - displayTaskUsage) / STACK_SIZE_DISPLAY * 100);
-    log_d("Refresh song task usage: [%.2f%%]", (float)(STACK_SIZE_REFRESH_SONG - refreshSongTaskUsage) / STACK_SIZE_REFRESH_SONG * 100);
-    log_d("Loop task usage:         [%.2f%%]", (float)(STACK_SIZE_LOOP - loopTaskUsage) / STACK_SIZE_LOOP * 100);
+//     log_d("Display task usage:      [%.2f%%]", (float)(STACK_SIZE_DISPLAY - displayTaskUsage) / STACK_SIZE_DISPLAY * 100);
+//     log_d("Refresh song task usage: [%.2f%%]", (float)(STACK_SIZE_REFRESH_SONG - refreshSongTaskUsage) / STACK_SIZE_REFRESH_SONG * 100);
+//     log_d("Loop task usage:         [%.2f%%]", (float)(STACK_SIZE_LOOP - loopTaskUsage) / STACK_SIZE_LOOP * 100);
 
-    log_d("--------------------------------------------------------------------------------");
+//     log_d("--------------------------------------------------------------------------------");
 
-    // print heap and psram
-    auto freePSRAM = ESP.getFreePsram();
-    auto maxPSRAM = ESP.getPsramSize();
-    auto freeHeap = ESP.getFreeHeap();
-    auto maxHeap = ESP.getHeapSize();
+//     // print heap and psram
+//     auto freePSRAM = ESP.getFreePsram();
+//     auto maxPSRAM = ESP.getPsramSize();
+//     auto freeHeap = ESP.getFreeHeap();
+//     auto maxHeap = ESP.getHeapSize();
 
-    auto freeFlash = ESP.getFreeSketchSpace();
-    auto maxFlash = ESP.getSketchSize();
+//     auto freeFlash = ESP.getFreeSketchSpace();
+//     auto maxFlash = ESP.getSketchSize();
 
-    // print used space in percent
-    if (maxPSRAM > 0)
-        log_d("Used PSRAM:  %.2f%%", (float)(maxPSRAM - freePSRAM) / maxPSRAM * 100);
-    log_d("Used Heap:   %.2f%%", (float)(maxHeap - freeHeap) / maxHeap * 100);
-    log_d("Loop running on core %d", xPortGetCoreID());
+//     // print used space in percent
+//     if (maxPSRAM > 0)
+//         log_d("Used PSRAM:  %.2f%%", (float)(maxPSRAM - freePSRAM) / maxPSRAM * 100);
+//     log_d("Used Heap:   %.2f%%", (float)(maxHeap - freeHeap) / maxHeap * 100);
+//     log_d("Loop running on core %d", xPortGetCoreID());
 
-    log_d("================================================================================");
-}
+//     log_d("================================================================================");
+// }
 
 void taskDisplay(void *pvParameters)
 {
@@ -372,7 +381,10 @@ void taskDisplay(void *pvParameters)
             u8g2.drawStr(0, 30, "and go to");
             u8g2.drawStr(0, 40, "http://192.168.4.1");
             u8g2.drawStr(0, 50, "to set up WiFi");
-            u8g2.drawStr(0, 60, "and Spotify");
+            if (savedClientID == NULL || savedClientSecret == NULL)
+            {
+                u8g2.drawStr(0, 60, "and Spotify");
+            }
             break;
         case DONE_SETUP:
             u8g2.drawStr(0, 10, "Setup");
@@ -404,44 +416,58 @@ void taskDisplay(void *pvParameters)
 
 void configStopCallback()
 {
-    auto enteredClientID = clientIDParameter.getValue();
-    auto enteredClientSecret = clientSecretParameter.getValue();
-
-    log_d("Entered clientID: %s\n", enteredClientID);
-    log_d("Entered clientSecret: %s\n", enteredClientSecret);
-
-    // check if clientID and clientSecret are valid
-    // have to be of length 32 and hex characters
-    if (strlen(enteredClientID) != 32)
+    if (savedClientID == NULL)
     {
-        log_e("ClientID should be of length 32");
-        return;
-    }
-    if (strlen(enteredClientSecret) != 32)
-    {
-        log_e("ClientSecret should be of length 32");
-        return;
-    }
+        auto enteredClientID = clientIDParameter.getValue();
+        log_d("Entered clientID: %s\n", enteredClientID);
 
-    for (int i = 0; i < 32; i++)
-    {
-        if (!isxdigit(enteredClientID[i]))
+        if (strlen(enteredClientID) != 32)
         {
-            log_e("ClientID should only contain hex characters");
+            log_e("ClientID should be of length 32");
             return;
         }
-        if (!isxdigit(enteredClientSecret[i]))
+
+        for (int i = 0; i < 32; i++)
         {
-            log_e("ClientSecret should only contain hex characters");
-            return;
+            if (!isxdigit(enteredClientID[i]))
+            {
+                log_e("ClientID should only contain hex characters");
+                return;
+            }
         }
+
+        NVSHandler nvsHandler;
+        nvsHandler.set("clientID", enteredClientID);
+
+        log_d("Saved clientID");
     }
 
-    NVSHandler nvsHandler;
-    nvsHandler.set("clientID", enteredClientID);
-    nvsHandler.set("clientSecret", enteredClientSecret);
+    if (savedClientSecret == NULL)
+    {
+        auto enteredClientSecret = clientSecretParameter.getValue();
+        log_d("Entered clientSecret: %s\n", enteredClientSecret);
 
-    log_d("Saved clientID and clientSecret");
+        if (strlen(enteredClientSecret) != 32)
+        {
+            log_e("ClientSecret should be of length 32");
+            return;
+        }
+
+        for (int i = 0; i < 32; i++)
+        {
+            if (!isxdigit(enteredClientSecret[i]))
+            {
+                log_e("ClientSecret should only contain hex characters");
+                return;
+            }
+        }
+
+        NVSHandler nvsHandler;
+        nvsHandler.set("clientSecret", enteredClientSecret);
+
+        log_d("Saved clientSecret");
+    }
+
     log_d("Restarting ESP, please refresh the page after approx 10 seconds");
 
     if (wifiManager.getWiFiIsSaved())
@@ -578,14 +604,9 @@ unsigned long tokenRefreshMillis = 0;
 
 void setup()
 {
-#if CLEAR_ON_DOUBLE_RESET
-    drd = new DoubleResetDetector(DRD_TIMEOUT, DRD_ADDRESS);
-    pinMode(5, OUTPUT);
-    digitalWrite(5, LOW);
-    startMillis = millis();
-    if (drd->detectDoubleReset())
+    if (detect_reset())
     {
-        log_d("Double reset detected");
+        log_e("Settings reset detected");
 
         NVSHandler nvsHandler;
 
@@ -594,9 +615,8 @@ void setup()
         nvsHandler.set("refreshToken", "null");
         wifiManager.resetSettings();
 
-        log_d("Erased all saved data");
+        log_e("Erased all saved data");
     }
-#endif
 
     log_d("Setting up display task");
     xTaskCreatePinnedToCore(
@@ -609,12 +629,22 @@ void setup()
         CORE_TASK_DISPLAY);
     log_d("Set up display task");
 
+    NVSHandler nvsHandler;
+    savedClientID = nvsHandler.get("clientID");
+    savedClientSecret = nvsHandler.get("clientSecret");
+
     log_d("Connecting to WiFi");
     currentStatus = INIT_WIFI;
     wifiManager.setDebugOutput(false);
     wifiManager.setCaptivePortalEnable(true);
-    wifiManager.addParameter(&clientIDParameter);
-    wifiManager.addParameter(&clientSecretParameter);
+    if (savedClientID == NULL)
+    {
+        wifiManager.addParameter(&clientIDParameter);
+    }
+    if (savedClientSecret == NULL)
+    {
+        wifiManager.addParameter(&clientSecretParameter);
+    }
     wifiManager.setSaveParamsCallback(configStopCallback);
     wifiManager.setSaveConfigCallback(configStopCallback);
     if (!wifiManager.autoConnect("Spotify Connect Setup"))
@@ -631,9 +661,7 @@ void setup()
 
     log_d("Getting credentials");
     currentStatus = INIT_CREDENTIALS;
-    NVSHandler nvsHandler;
-    savedClientID = nvsHandler.get("clientID");
-    savedClientSecret = nvsHandler.get("clientSecret");
+
     auto savedRefreshToken = nvsHandler.get("refreshToken");
     auto savedAccessToken = nvsHandler.get("accessToken");
 
@@ -731,15 +759,6 @@ unsigned long lastUsagePrint = 0;
 
 void loop()
 {
-#if CLEAR_ON_DOUBLE_RESET
-    if (millis() - startMillis > DRD_TIMEOUT * 1000)
-    {
-        digitalWrite(5, HIGH);
-    }
-
-    drd->loop();
-#endif
-
     if (spotconn.accessTokenSet)
     {
         if (backwardButton.wasPressed())

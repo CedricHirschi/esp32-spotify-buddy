@@ -9,6 +9,7 @@
 #define PIN_DISPLAY_CS GPIO_NUM_22
 #define PIN_DISPLAY_DC GPIO_NUM_21
 #define PIN_DISPLAY_RESET GPIO_NUM_17
+#define PIN_RESET_SETTINGS GPIO_NUM_2
 
 #define DISPLAY_REFRESH_RATE 10 // In FPS (frames per second) or Hz
 #define SONG_REFRESH_TIME 1000  // In ms
@@ -18,7 +19,5 @@
 
 #define BUTTON_DEBOUNCE_TIME 50               // In ms
 #define POTENTIOMETER_FILTER_COEFFICIENT 0.9f // Between 0 (no change) and 1 (no filtering)
-
-#define CLEAR_ON_DOUBLE_RESET false // Set to true to clear all settings on double reset
 
 #define HAS_VOLUME_POTENTIOMETER true // Set to false if you don't have a volume potentiometer
