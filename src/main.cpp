@@ -1,5 +1,4 @@
 #define CORE_DEBUG_LEVEL 2 // 0: None, 1: Error, 2: Warning, 3: Info, 4: Debug, 5: Verbose
-// #define ARDUHAL_LOG_LEVEL CORE_DEBUG_LEVEL
 #define CONFIG_ARDUHAL_LOG_COLORS 1
 
 #include <Arduino.h>
@@ -17,24 +16,11 @@
 #include "debutton.h"
 #include "analogfilter.h"
 #include "nvshandler.h"
-
-#define ESP_DRD_USE_SPIFFS true
-#define DOUBLERESETDETECTOR_DEBUG true
-
-#include <ESP_DoubleResetDetector.h>
-
-#define DRD_TIMEOUT 7
-#define DRD_ADDRESS 0
-
-#define EN 0
-#define DE 1
-#define FR 2
-#define IT 3
-#define ES 4
-#define PT 5
-#define NL 6
+#include "scrollingtext.h"
+#include "timeformats.h"
 
 #include "config.h"
+#include "status.h"
 
 #define STACK_SIZE_DISPLAY 2000
 #define STACK_SIZE_REFRESH_SONG 5500
@@ -47,6 +33,8 @@
 
 const char spotifyRedirectURL[100] = "http://%s/callback";
 char spotifyRedirectURLFormatted[100];
+const char *savedClientID;
+const char *savedClientSecret;
 
 U8G2_DISPLAY
 WebServer server(80);
@@ -55,78 +43,11 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", UTC_OFFSET_S);
 DebouncedButton backwardButton(PIN_BACKWARD_BUTTON, BUTTON_DEBOUNCE_TIME);
 DebouncedButton playButton(PIN_PLAY_BUTTON, BUTTON_DEBOUNCE_TIME);
 DebouncedButton forwardButton(PIN_FORWARD_BUTTON, BUTTON_DEBOUNCE_TIME);
-SpotConn spotconn;
-WiFiManager wifiManager;
-
 #if HAS_VOLUME_POTENTIOMETER
 FilteredAnalog volumePot(PIN_VOLUME_POTENTIOMETER, POTENTIOMETER_FILTER_COEFFICIENT);
 #endif
-
-#if CLEAR_ON_DOUBLE_RESET
-DoubleResetDetector *drd;
-unsigned long startMillis;
-#endif
-
-#if WEEKDAYS_LANGUAGE == EN
-char daysOfTheWeek[7][10] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
-#elif WEEKDAYS_LANGUAGE == DE
-char daysOfTheWeek[7][12] = {"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"};
-#elif WEEKDAYS_LANGUAGE == FR
-char daysOfTheWeek[7][10] = {"Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"};
-#elif WEEKDAYS_LANGUAGE == IT
-char daysOfTheWeek[7][10] = {"Domenica", "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"};
-#elif WEEKDAYS_LANGUAGE == ES
-char daysOfTheWeek[7][10] = {"Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"};
-#elif WEEKDAYS_LANGUAGE == PT
-char daysOfTheWeek[7][10] = {"Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"};
-#elif WEEKDAYS_LANGUAGE == NL
-char daysOfTheWeek[7][10] = {"Zondag", "Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag", "Zaterdag"};
-#else
-#error "WEEKDAYS_LANGUAGE not set correctly. See config.h for more information."
-#endif
-
-typedef enum currentStatus_e
-{
-    NONE,
-    INIT_WIFI,
-    DONE_WIFI,
-    INIT_SERVER,
-    DONE_SERVER,
-    INIT_PINS,
-    DONE_PINS,
-    INIT_CREDENTIALS,
-    DONE_CREDENTIALS,
-    INIT_AUTHORIZATION,
-    DONE_AUTHORIZATION,
-    INIT_SONG_REFRESH,
-    DONE_SONG_REFRESH,
-    INIT_BUTTONS,
-    DONE_BUTTONS,
-    DONE_SETUP,
-    NO_SONG,
-    PLAYING_SONG,
-    NOT_AUTHORIZED,
-    ERROR
-} currentStatus_t;
-
-char statusStrings[18][20] = {
-    "NONE",
-    "INIT_WIFI",
-    "DONE_WIFI",
-    "INIT_SERVER",
-    "DONE_SERVER",
-    "INIT_PINS",
-    "DONE_PINS",
-    "INIT_AUTH_REFRESH",
-    "DONE_AUTH_REFRESH",
-    "INIT_SONG_REFRESH",
-    "DONE_SONG_REFRESH",
-    "INIT_BUTTONS",
-    "DONE_BUTTONS",
-    "DONE_SETUP",
-    "NO_SONG",
-    "PLAYING_SONG",
-    "NOT_AUTHORIZED"};
+SpotConn spotconn;
+WiFiManager wifiManager;
 
 currentStatus_t currentStatus = NONE;
 String currentError;
@@ -134,11 +55,7 @@ String currentError;
 WiFiManagerParameter clientIDParameter("clientID", "Spotify clientID", "", 32);
 WiFiManagerParameter clientSecretParameter("clientSecret", "Spotify clientSecret", "", 32);
 
-const char *savedClientID;
-const char *savedClientSecret;
-
 SemaphoreHandle_t httpMutex = xSemaphoreCreateMutex();
-
 TaskHandle_t taskDisplayHandle = NULL;
 TaskHandle_t taskServeHandle = NULL;
 TaskHandle_t taskRefreshSongHandle = NULL;
@@ -152,127 +69,37 @@ bool detect_reset()
     return reset;
 }
 
-void displayClock(bool withIp = false)
+void displayClock()
 {
     timeClient.update();
+
     u8g2.setFont(u8g2_font_ncenB08_tr);
-    char *day = daysOfTheWeek[timeClient.getDay()];
-    u8g2.setCursor((u8g2.getWidth() - u8g2.getStrWidth(day)) / 2, 10);
-    u8g2.println(day);
+    String date = formatCurrentDate(timeClient);
+    u8g2.setCursor((u8g2.getWidth() - u8g2.getStrWidth(date.c_str())) / 2, 10);
+    u8g2.println(date);
+
     u8g2.setFont(u8g2_font_inb19_mf);
     String time = timeClient.getFormattedTime();
-    if (withIp)
-        u8g2.setCursor((u8g2.getWidth() - u8g2.getStrWidth(time.c_str())) / 2, 40);
-    else
-        u8g2.setCursor((u8g2.getWidth() - u8g2.getStrWidth(time.c_str())) / 2, 45);
+    u8g2.setCursor((u8g2.getWidth() - u8g2.getStrWidth(time.c_str())) / 2, 45);
     u8g2.println(time);
 }
 
-void displayIP()
-{
-    u8g2.setFont(u8g2_font_ncenB08_tr);
-    u8g2.setCursor((u8g2.getWidth() - u8g2.getStrWidth(WiFi.localIP().toString().c_str())) / 2, 60);
-    u8g2.println(WiFi.localIP());
-}
-
-String previousSongId = "";
-String prevoiusSongName = "";
-int advanceIndex = 0;
-int remainingWidth = 0;
-int8_t direction = 1;
-unsigned long pauseRemaining = 0;
-
-String formatTime(uint ms)
-{
-    String result = String(ms / 60000);
-
-    result += ":";
-    if (ms % 60000 < 10000)
-        result += "0";
-    result += String(ms % 60000 / 1000);
-
-    return result;
-}
+ScrollingText songName(u8g2, 10, DISPLAY_REFRESH_RATE);
+ScrollingText artistName(u8g2, 21, DISPLAY_REFRESH_RATE);
+ScrollingText albumName(u8g2, 31, DISPLAY_REFRESH_RATE);
 
 void displaySong()
 {
+    // print song name
     u8g2.setFont(u8g2_font_ncenB08_tr);
+    songName.update(spotconn.currentSong.song);
 
-    if (previousSongId != spotconn.currentSong.Id)
-    {
-        previousSongId = spotconn.currentSong.Id;
-        prevoiusSongName = spotconn.currentSong.song;
-        remainingWidth = (u8g2.getStrWidth(prevoiusSongName.c_str()) - u8g2.getWidth()) + 5;
-        advanceIndex = 0;
-        direction = 1;
-        pauseRemaining = 0;
-        // int charWidth = u8g2.getStrWidth("W");
-        // log_e("Width too long: %d", remainingWidth);
-        // log_e("Width of char: %d", charWidth);
-        // remainingWidth = remainingWidth / charWidth + 5;
-        // log_e("Chars too long: %d", remainingWidth);
-    }
-
-    // log_d("Displaying song info");
-
-    u8g2.clearBuffer();
-    // log_d("Cleared buffer");
-    // splitString(spotconn.currentSong.song, lines, lineCount, u8g2);
-    // // log_d("Split song");
-    // for (int i = 0; i < lineCount; i++)
-    // {
-    //     u8g2.setCursor(0, 10 + (i * 10));
-    //     // log_d(" - " + lines[i]);
-    //     u8g2.println(lines[i]);
-    // }
-
-    u8g2.drawStr(-advanceIndex, 10, prevoiusSongName.c_str());
-    if (pauseRemaining > 0)
-    {
-        pauseRemaining -= 1000 / DISPLAY_REFRESH_RATE;
-    }
-    else if (remainingWidth > 0)
-    {
-        advanceIndex += direction;
-
-        if (advanceIndex >= remainingWidth)
-        {
-            advanceIndex = remainingWidth;
-            direction = -5;
-            pauseRemaining = 1000;
-            // log_e("Resetting song name");
-        }
-        if (advanceIndex < 0)
-        {
-            advanceIndex = 0;
-            direction = 1;
-            pauseRemaining = 1000;
-            // log_e("Resetting song name");
-        }
-    }
-
-    // log_d("Printed song");
+    // print artist and album name
     u8g2.setFont(u8g2_font_PixelTheatre_te);
-    // splitString(spotconn.currentSong.artist, lines, lineCount, u8g2);
-    // // log_d("Split artist");
-    // for (int i = 0; i < lineCount; i++)
-    // {
-    //     u8g2.setCursor(0, 35 + (i * 10));
-    //     // log_d(" - " + lines[i]);
-    //     u8g2.println(lines[i]);
-    // }
-    u8g2.drawStr(0, 21, spotconn.currentSong.artist.c_str());
-    // log_d("Printed artist");
-    // splitString(spotconn.currentSong.album, lines, lineCount, u8g2);
-    // // log_d("Split album");
-    // for (int i = 0; i < lineCount; i++)
-    // {
-    //     u8g2.setCursor(0, 45 + (i * 10));
-    //     // log_d(" - " + lines[i]);
-    //     u8g2.println(lines[i]);
-    // }
-    u8g2.drawStr(0, 31, spotconn.currentSong.album.c_str());
-    // log_d("Printed album");
+    artistName.update(spotconn.currentSong.artist);
+    albumName.update(spotconn.currentSong.album);
+
+    // print device name if available
     if (spotconn.activeDevice.name != "")
     {
         u8g2.setCursor(0, 43);
@@ -281,17 +108,15 @@ void displaySong()
 
     // print current time (left aligned) and duration (right aligned)
     u8g2.setCursor(0, 55);
-    u8g2.printf("%s", formatTime(spotconn.currentSongPositionMs).c_str());
-    u8g2.setCursor(u8g2.getWidth() - u8g2.getStrWidth(formatTime(spotconn.currentSong.durationMs).c_str()), 55);
-    u8g2.printf("%s", formatTime(spotconn.currentSong.durationMs).c_str());
+    u8g2.printf("%s", formatSongTime(spotconn.currentSongPositionMs).c_str());
+    u8g2.setCursor(u8g2.getWidth() - u8g2.getStrWidth(formatSongTime(spotconn.currentSong.durationMs).c_str()), 55);
+    u8g2.printf("%s", formatSongTime(spotconn.currentSong.durationMs).c_str());
 
     // draw progress bar
     float progress = spotconn.currentSongPositionMs / spotconn.currentSong.durationMs;
     int barLength = u8g2.getWidth() * progress;
     int barHeight = 4;
     u8g2.drawBox(0, u8g2.getHeight() - barHeight - 1, barLength, barHeight);
-
-    // delete[] lines;
 }
 
 // void printUsages()
@@ -369,6 +194,7 @@ void taskDisplay(void *pvParameters)
             u8g2.setCursor(0, 50);
             u8g2.printf("credentials");
             break;
+        case NOT_AUTHORIZED:
         case INIT_AUTHORIZATION:
             u8g2.drawStr(0, 10, "Go to");
             u8g2.drawStr(0, 20, ("http://" + WiFi.localIP().toString()).c_str());
@@ -387,18 +213,11 @@ void taskDisplay(void *pvParameters)
             }
             break;
         case DONE_SETUP:
-            u8g2.drawStr(0, 10, "Setup");
-            u8g2.drawStr(0, 20, "Done");
-            break;
         case NO_SONG:
-            displayClock(false);
+            displayClock();
             break;
         case PLAYING_SONG:
             displaySong();
-            break;
-        case NOT_AUTHORIZED:
-            displayClock(true);
-            displayIP();
             break;
         case ERROR:
             u8g2.setFont(u8g2_font_ncenB08_tr);
