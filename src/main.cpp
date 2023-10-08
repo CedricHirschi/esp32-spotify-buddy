@@ -155,6 +155,7 @@ void displaySong()
 
 void taskDisplay(void *pvParameters)
 {
+    SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI);
     u8g2.begin();
     u8g2.setContrast(0); // reduce brightness
     u8g2.setFont(u8g2_font_ncenB08_tr);
