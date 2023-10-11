@@ -129,6 +129,15 @@ public:
     bool getDeviceInfo();
 
     /**
+     * @brief Get the current song's and device's information
+     *
+     * @return `true` if the information was successfully retrieved, `false` otherwise
+     *
+     * @note This is more efficient than calling `this.getTrackInfo()` and `this.getDeviceInfo()` separately
+     */
+    bool getInfo();
+
+    /**
      * @brief Toggle the play/pause state of the current song
      *
      * @return `true` if the song was successfully toggled, `false` otherwise
@@ -163,6 +172,7 @@ public:
     long tokenStartTime;         /// @brief The time the access token was set
     int tokenExpireTime;         /// @brief The timespan in which the access token expires in seconds
     songDetails currentSong;     /// @brief The current song's information
+    bool isPlaying = false;
     float currentSongPositionMs; /// @brief The current song's position in milliseconds
     int currVol;                 /// @brief The current volume (0 - 100)
     int lastError;               /// @brief The last error code (mostly HTTP response codes)
@@ -170,15 +180,12 @@ public:
     String accessToken;
     String refreshToken;
 
-    Device devices[10];
-    Device activeDevice;
-    int deviceCount;
+    Device currentDevice;
 
 private:
     std::unique_ptr<WiFiClientSecure> client;
     HTTPClient https;
 
-    bool isPlaying = false;
     float lastSongPositionMs;
 
     const char *clientID;
@@ -190,6 +197,10 @@ private:
     String authBearer;
     String requestBody;
     String url;
+
+    bool parseSong(String &json);
+    bool parseDevices(String &json);
+    bool parseInfo(String &json);
 };
 
 #endif // _SPOTCONN_H

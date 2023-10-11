@@ -189,11 +189,9 @@ bool SpotConn::getTrackInfo()
     return success;
 }
 
-bool parseDevices(String json, Device devices[], int &numDevices)
+bool SpotConn::parseDevices(String &json)
 {
-    const size_t capacity = JSON_ARRAY_SIZE(2) + 2 * JSON_OBJECT_SIZE(8) + 300;
-
-    DynamicJsonDocument doc(capacity);
+    DynamicJsonDocument doc(12288);
 
     DeserializationError error = deserializeJson(doc, json);
     if (error)
@@ -203,30 +201,14 @@ bool parseDevices(String json, Device devices[], int &numDevices)
         return false;
     }
 
-    JsonArray devicesArray = doc["devices"];
+    currentDevice.id = doc["device"]["id"].as<String>();
+    currentDevice.name = doc["device"]["name"].as<String>();
+    currentDevice.isActive = doc["device"]["is_active"].as<bool>();
+    currentDevice.isRestricted = doc["device"]["is_restricted"].as<bool>();
+    currentDevice.supportsVolume = doc["device"]["supports_volume"].as<bool>();
 
-    numDevices = 0;
-
-    for (auto device : devicesArray)
-    {
-        // log_e("Device: %s", device.as<String>().c_str());
-
-        String currentDeviceId = device["id"].as<String>();
-        String currentDeviceName = device["name"].as<String>();
-        bool currentDeviceIsActive = device["is_active"].as<bool>();
-        bool currentDeviceIsRestricted = device["is_restricted"].as<bool>();
-        bool currentDeviceSupportsVolume = device["supports_volume"].as<bool>();
-
-        devices[numDevices].id = currentDeviceId;
-        devices[numDevices].name = currentDeviceName;
-        devices[numDevices].isActive = currentDeviceIsActive;
-        devices[numDevices].isRestricted = currentDeviceIsRestricted;
-        devices[numDevices].supportsVolume = currentDeviceSupportsVolume;
-
-        // devices[numDevices].print();
-
-        numDevices++;
-    }
+    doc.garbageCollect();
+    doc.clear();
 
     return true;
 }
@@ -255,20 +237,7 @@ bool SpotConn::getDeviceInfo()
 
         // log_e("Response: %s", response.c_str());
 
-        success = parseDevices(response, devices, deviceCount);
-
-        if (success)
-        {
-            for (int i = 0; i < deviceCount; i++)
-            {
-                // devices[i].print();
-                if (devices[i].isActive)
-                {
-                    activeDevice = devices[i];
-                    break;
-                }
-            }
-        }
+        success = parseDevices(response);
     }
     else
     {
@@ -282,9 +251,111 @@ bool SpotConn::getDeviceInfo()
     return success;
 }
 
+bool SpotConn::parseSong(String &json)
+{
+    DynamicJsonDocument doc(12288);
+
+    DeserializationError error = deserializeJson(doc, json);
+    if (error)
+    {
+        log_e("Error parsing song: %s", error.c_str());
+
+        return false;
+    }
+
+    currentSong.Id = doc["item"]["id"].as<String>();
+    currentSong.song = doc["item"]["name"].as<String>();
+    currentSong.artist = doc["item"]["artists"][0]["name"].as<String>();
+    currentSong.album = doc["item"]["album"]["name"].as<String>();
+    currentSong.durationMs = doc["item"]["duration_ms"].as<int>();
+
+    currentSongPositionMs = doc["progress_ms"].as<float>();
+
+    isPlaying = doc["is_playing"].as<bool>();
+
+    doc.garbageCollect();
+    doc.clear();
+
+    return true;
+}
+
+bool SpotConn::parseInfo(String &json)
+{
+    DynamicJsonDocument doc(12288);
+
+    DeserializationError error = deserializeJson(doc, json);
+    if (error)
+    {
+        log_e("Error parsing song: %s", error.c_str());
+
+        return false;
+    }
+
+    currentDevice.id = doc["device"]["id"].as<String>();
+    currentDevice.name = doc["device"]["name"].as<String>();
+    currentDevice.isActive = doc["device"]["is_active"].as<bool>();
+    currentDevice.isRestricted = doc["device"]["is_restricted"].as<bool>();
+    currentDevice.supportsVolume = doc["device"]["supports_volume"].as<bool>();
+
+    currentSong.Id = doc["item"]["id"].as<String>();
+    currentSong.song = doc["item"]["name"].as<String>();
+    currentSong.artist = doc["item"]["artists"][0]["name"].as<String>();
+    currentSong.album = doc["item"]["album"]["name"].as<String>();
+    currentSong.durationMs = doc["item"]["duration_ms"].as<int>();
+
+    currentSongPositionMs = doc["progress_ms"].as<float>();
+
+    isPlaying = doc["is_playing"].as<bool>();
+
+    doc.garbageCollect();
+    doc.clear();
+
+    return true;
+}
+
+bool SpotConn::getInfo()
+{
+    log_d("Start");
+
+    char urlNew[] = "https://api.spotify.com/v1/me/player";
+
+    https.begin(*client, urlNew);
+    https.addHeader(F("Authorization"), authBearer);
+
+    int httpsResponse = https.GET();
+
+    bool success = false;
+
+    switch (httpsResponse)
+    {
+    case 200: // normal response
+    {
+        String response = https.getString();
+        https.end();
+
+        success = parseInfo(response);
+    }
+    break;
+    case 204: // Playback not acailable or active
+        currentDevice = Device();
+        currentSong = songDetails();
+
+        success = true;
+    case 401: // Bad or expired token
+    case 403: // Bad OAuth request
+    case 429: // The app has exceeded its rate limits
+    default:
+        https.end();
+        lastError = httpsResponse;
+    }
+
+    log_d("End");
+    return success;
+}
+
 bool SpotConn::togglePlay()
 {
-    if (!activeDevice.id || activeDevice.isRestricted)
+    if (!currentDevice.id || currentDevice.isRestricted)
     {
         log_w("No device or device is restricted");
         return false;
@@ -318,7 +389,7 @@ bool SpotConn::togglePlay()
 
 bool SpotConn::adjustVolume(int vol)
 {
-    if (!activeDevice.id || activeDevice.isRestricted || !activeDevice.supportsVolume)
+    if (!currentDevice.id || currentDevice.isRestricted || !currentDevice.supportsVolume)
     {
         log_e("No device or device is restricted or device doesn't support volume");
         return false;
@@ -350,7 +421,7 @@ bool SpotConn::adjustVolume(int vol)
 
 bool SpotConn::skipForward()
 {
-    if (!activeDevice.id || activeDevice.isRestricted)
+    if (!currentDevice.id || currentDevice.isRestricted)
     {
         log_w("No device or device is restricted");
         return false;
@@ -383,7 +454,7 @@ bool SpotConn::skipForward()
 
 bool SpotConn::skipBack()
 {
-    if (!activeDevice.id || activeDevice.isRestricted)
+    if (!currentDevice.id || currentDevice.isRestricted)
     {
         log_w("No device or device is restricted");
         return false;

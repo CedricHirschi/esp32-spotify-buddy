@@ -22,8 +22,8 @@
 #include "config.h"
 #include "status.h"
 
-#define STACK_SIZE_DISPLAY 2000
-#define STACK_SIZE_REFRESH_SONG 5500
+#define STACK_SIZE_DISPLAY 3000
+#define STACK_SIZE_REFRESH_SONG 6500
 #define STACK_SIZE_LOOP 8192
 
 #define CORE_TASK_DISPLAY 0
@@ -100,10 +100,10 @@ void displaySong()
     albumName.update(spotconn.currentSong.album);
 
     // print device name if available
-    if (spotconn.activeDevice.name != "")
+    if (spotconn.currentDevice.name != "")
     {
         u8g2.setCursor(0, 43);
-        u8g2.printf("On '%s'", spotconn.activeDevice.name.c_str());
+        u8g2.printf("On '%s'", spotconn.currentDevice.name.c_str());
     }
 
     // print current time (left aligned) and duration (right aligned)
@@ -117,41 +117,61 @@ void displaySong()
     int barLength = u8g2.getWidth() * progress;
     int barHeight = 4;
     u8g2.drawBox(0, u8g2.getHeight() - barHeight - 1, barLength, barHeight);
+
+    // update song position
+    if (spotconn.isPlaying)
+    {
+        spotconn.currentSongPositionMs += 1000 / DISPLAY_REFRESH_RATE;
+        if (spotconn.currentSongPositionMs > spotconn.currentSong.durationMs)
+        {
+            spotconn.currentSongPositionMs = spotconn.currentSong.durationMs;
+        }
+    }
 }
 
-// void printUsages()
-// {
-//     // print usages of all tasks
-//     log_d("================================================================================");
+void printUsages()
+{
+    // print usages of all tasks
+    log_e("================================================================================");
 
-//     auto displayTaskUsage = uxTaskGetStackHighWaterMark(taskDisplayHandle);
-//     auto serveTaskUsage = uxTaskGetStackHighWaterMark(taskServeHandle);
-//     auto refreshSongTaskUsage = uxTaskGetStackHighWaterMark(taskRefreshSongHandle);
-//     auto loopTaskUsage = uxTaskGetStackHighWaterMark(NULL);
+    auto displayTaskUsage = uxTaskGetStackHighWaterMark(taskDisplayHandle);
+    auto serveTaskUsage = uxTaskGetStackHighWaterMark(taskServeHandle);
+    auto refreshSongTaskUsage = uxTaskGetStackHighWaterMark(taskRefreshSongHandle);
+    auto loopTaskUsage = uxTaskGetStackHighWaterMark(NULL);
 
-//     log_d("Display task usage:      [%.2f%%]", (float)(STACK_SIZE_DISPLAY - displayTaskUsage) / STACK_SIZE_DISPLAY * 100);
-//     log_d("Refresh song task usage: [%.2f%%]", (float)(STACK_SIZE_REFRESH_SONG - refreshSongTaskUsage) / STACK_SIZE_REFRESH_SONG * 100);
-//     log_d("Loop task usage:         [%.2f%%]", (float)(STACK_SIZE_LOOP - loopTaskUsage) / STACK_SIZE_LOOP * 100);
+    log_e("Display task usage:      [%.2f%%]", (float)(STACK_SIZE_DISPLAY - displayTaskUsage) / STACK_SIZE_DISPLAY * 100);
+    log_e("Refresh song task usage: [%.2f%%]", (float)(STACK_SIZE_REFRESH_SONG - refreshSongTaskUsage) / STACK_SIZE_REFRESH_SONG * 100);
+    log_e("Loop task usage:         [%.2f%%]", (float)(STACK_SIZE_LOOP - loopTaskUsage) / STACK_SIZE_LOOP * 100);
 
-//     log_d("--------------------------------------------------------------------------------");
+    log_e("--------------------------------------------------------------------------------");
 
-//     // print heap and psram
-//     auto freePSRAM = ESP.getFreePsram();
-//     auto maxPSRAM = ESP.getPsramSize();
-//     auto freeHeap = ESP.getFreeHeap();
-//     auto maxHeap = ESP.getHeapSize();
+    // print heap and psram
+    auto freePSRAM = ESP.getMinFreePsram();
+    auto maxPSRAM = ESP.getPsramSize();
 
-//     auto freeFlash = ESP.getFreeSketchSpace();
-//     auto maxFlash = ESP.getSketchSize();
+    auto freeHeap = ESP.getMinFreeHeap();
+    auto maxHeap = ESP.getHeapSize();
 
-//     // print used space in percent
-//     if (maxPSRAM > 0)
-//         log_d("Used PSRAM:  %.2f%%", (float)(maxPSRAM - freePSRAM) / maxPSRAM * 100);
-//     log_d("Used Heap:   %.2f%%", (float)(maxHeap - freeHeap) / maxHeap * 100);
-//     log_d("Loop running on core %d", xPortGetCoreID());
+    auto maxAllocPSRAM = ESP.getMaxAllocPsram();
+    auto maxAllocHeap = ESP.getMaxAllocHeap();
 
-//     log_d("================================================================================");
-// }
+    // auto freeSketch = ESP.getFreeSketchSpace();
+    // auto maxSketch = ESP.getSketchSize();
+
+    // print used space in percent
+    if (maxPSRAM > 0)
+    {
+        log_e("Used PSRAM:  %.2f%%", (float)(maxPSRAM - freePSRAM) / maxPSRAM * 100);
+        log_e("Max alloc PSRAM: %d kB", maxAllocPSRAM / 1024);
+    }
+    log_e("Used Heap:   %.2f%%", (float)(maxHeap - freeHeap) / maxHeap * 100);
+    log_e("Max alloc Heap: %d kB", maxAllocHeap / 1024);
+    // log_d("Used Sketch: %.2f%%", (float)(maxSketch - freeSketch) / maxSketch * 100);
+    log_e("--------------------------------------------------------------------------------");
+    log_e("Loop running on core %d", xPortGetCoreID());
+
+    log_e("================================================================================");
+}
 
 void taskDisplay(void *pvParameters)
 {
@@ -206,7 +226,9 @@ void taskDisplay(void *pvParameters)
             u8g2.drawStr(0, 10, "Connect to WiFi");
             u8g2.drawStr(0, 20, "'Spotify Connect Setup'");
             u8g2.drawStr(0, 30, "and go to");
-            u8g2.drawStr(0, 40, "http://192.168.4.1");
+            // u8g2.drawStr(0, 40, "http://192.168.4.1");
+            u8g2.setCursor(0, 40);
+            u8g2.printf("http://%s", WiFi.softAPIP().toString().c_str());
             u8g2.drawStr(0, 50, "to set up WiFi");
             if (savedClientID == NULL || savedClientSecret == NULL)
             {
@@ -349,9 +371,60 @@ void taskRefreshSong(void *pvParameters)
 
             bool status = false;
 
+            // if (xSemaphoreTake(httpMutex, 1000))
+            // {
+            //     status = spotconn.getTrackInfo();
+            //     xSemaphoreGive(httpMutex);
+            // }
+
+            // if (status)
+            // {
+            //     currentStatus = PLAYING_SONG;
+
+            //     if (spotconn.currentSong.song == "")
+            //     {
+            //         currentStatus = NO_SONG;
+            //         log_d("No song playing");
+            //     }
+            //     else
+            //     {
+            //         log_d("Current song:");
+            //         spotconn.currentSong.print();
+
+            //         log_d("Getting device info");
+
+            //         if (xSemaphoreTake(httpMutex, 1000))
+            //         {
+            //             status = spotconn.getDeviceInfo();
+            //             xSemaphoreGive(httpMutex);
+            //         }
+
+            //         if (status)
+            //         {
+            //             log_d("Current device:");
+            //             spotconn.activeDevice.print();
+            //         }
+            //         else
+            //         {
+            //             log_e("Failed to get device info");
+            //             currentStatus = ERROR;
+            //             currentError = "Failed to get device info";
+            //         }
+            //     }
+
+            //     // log_d(spotconn.currentSong.song + " by " + spotconn.currentSong.artist);
+            //     // log_d(spotconn.currentSong.album + " - [" + spotconn.currentSongPositionMs + "/" + spotconn.currentSong.durationMs + "] ms");
+            // }
+            // else
+            // {
+            //     log_e("Failed to get track info");
+            //     currentStatus = ERROR;
+            //     currentError = "Failed to get track info";
+            // }
+
             if (xSemaphoreTake(httpMutex, 1000))
             {
-                status = spotconn.getTrackInfo();
+                status = spotconn.getInfo();
                 xSemaphoreGive(httpMutex);
             }
 
@@ -368,36 +441,16 @@ void taskRefreshSong(void *pvParameters)
                 {
                     log_d("Current song:");
                     spotconn.currentSong.print();
+
+                    log_d("Current device:");
+                    spotconn.currentDevice.print();
                 }
-
-                // log_d(spotconn.currentSong.song + " by " + spotconn.currentSong.artist);
-                // log_d(spotconn.currentSong.album + " - [" + spotconn.currentSongPositionMs + "/" + spotconn.currentSong.durationMs + "] ms");
             }
             else
             {
-                log_e("Failed to get track info");
+                log_e("Failed to get info");
                 currentStatus = ERROR;
-                currentError = "Failed to get track info";
-            }
-
-            log_d("Getting device info");
-
-            if (xSemaphoreTake(httpMutex, 1000))
-            {
-                status = spotconn.getDeviceInfo();
-                xSemaphoreGive(httpMutex);
-            }
-
-            if (status)
-            {
-                log_d("Current device:");
-                spotconn.activeDevice.print();
-            }
-            else
-            {
-                log_e("Failed to get device info");
-                currentStatus = ERROR;
-                currentError = "Failed to get device info";
+                currentError = "Failed to get info";
             }
         }
 
@@ -456,7 +509,7 @@ void setup()
     log_d("Connecting to WiFi");
     currentStatus = INIT_WIFI;
     wifiManager.setDebugOutput(false);
-    wifiManager.setCaptivePortalEnable(true);
+    // wifiManager.setCaptivePortalEnable(true);
     if (savedClientID == NULL)
     {
         wifiManager.addParameter(&clientIDParameter);
@@ -517,7 +570,6 @@ void setup()
     else
     {
         log_d("Starting auth server");
-
         server.on("/", handlePageRoot);
         server.on("/wifisave", handlePageRoot);
         server.on("/callback", handlePageCallback);
@@ -647,11 +699,11 @@ void loop()
             }
         }
 
-        // if (millis() - lastUsagePrint > 5000)
-        // {
-        //     printUsages();
-        //     lastUsagePrint = millis();
-        // }
+        if (millis() - lastUsagePrint > 5000)
+        {
+            printUsages();
+            lastUsagePrint = millis();
+        }
     }
     else
     {
