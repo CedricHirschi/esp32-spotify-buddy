@@ -49,3 +49,5 @@
 #define POTENTIOMETER_FILTER_COEFFICIENT 0.9f // Between 0 (no change) and 1 (no filtering)
 
 #define HAS_VOLUME_POTENTIOMETER true // Set to false if you don't have a volume potentiometer
+
+#define PRINT_USAGES false // Set to true to print the memory usage every 5 seconds

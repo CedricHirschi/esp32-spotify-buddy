@@ -7,6 +7,7 @@
 #include <WebServer.h>
 #include <WiFiUdp.h>
 #include <NTPClient.h>
+#include <ESPmDNS.h>
 
 #include <U8g2lib.h>
 #include <SPI.h>
@@ -31,8 +32,7 @@
 #define CORE_TASK_REFRESH_SONG 1
 #define CORE_TASK_LOOP 1
 
-const char spotifyRedirectURL[100] = "http://%s/callback";
-char spotifyRedirectURLFormatted[100];
+const char spotifyRedirectURL[100] = "http://spotifybuddy.local/callback";
 const char *savedClientID;
 const char *savedClientSecret;
 
@@ -204,21 +204,16 @@ void taskDisplay(void *pvParameters)
             u8g2.drawStr(0, 30, statusStrings[currentStatus]);
             break;
         case INIT_CREDENTIALS:
-            u8g2.setCursor(0, 10);
-            u8g2.print("Go to");
-            u8g2.setCursor(0, 20);
-            u8g2.printf("http://%s", WiFi.localIP().toString().c_str());
-            u8g2.setCursor(0, 30);
-            u8g2.printf("in your browser and");
-            u8g2.setCursor(0, 40);
-            u8g2.printf("enter your Spotify");
-            u8g2.setCursor(0, 50);
-            u8g2.printf("credentials");
+            u8g2.drawStr(0, 10, "Go to");
+            u8g2.drawStr(0, 20, "http://spotifybuddy.local");
+            u8g2.drawStr(0, 30, "in your browser and");
+            u8g2.drawStr(0, 40, "enter your Spotify");
+            u8g2.drawStr(0, 50, "credentials");
             break;
         case NOT_AUTHORIZED:
         case INIT_AUTHORIZATION:
             u8g2.drawStr(0, 10, "Go to");
-            u8g2.drawStr(0, 20, ("http://" + WiFi.localIP().toString()).c_str());
+            u8g2.drawStr(0, 20, "http://spotifybuddy.local");
             u8g2.drawStr(0, 30, "in your browser");
             u8g2.drawStr(0, 40, "to authorize Spotify");
             break;
@@ -226,7 +221,6 @@ void taskDisplay(void *pvParameters)
             u8g2.drawStr(0, 10, "Connect to WiFi");
             u8g2.drawStr(0, 20, "'Spotify Connect Setup'");
             u8g2.drawStr(0, 30, "and go to");
-            // u8g2.drawStr(0, 40, "http://192.168.4.1");
             u8g2.setCursor(0, 40);
             u8g2.printf("http://%s", WiFi.softAPIP().toString().c_str());
             u8g2.drawStr(0, 50, "to set up WiFi");
@@ -312,32 +306,27 @@ void configStopCallback()
 
     log_d("Restarting ESP, please refresh the page after approx 10 seconds");
 
-    if (wifiManager.getWiFiIsSaved())
-    {
-        ESP.restart();
-        delay(1000);
-    }
+    ESP.restart();
+    delay(1000);
 }
 
 void handlePageRoot()
 {
     char page[600];
-    sprintf(page, mainPage, savedClientID, spotifyRedirectURLFormatted);
+    sprintf(page, mainPage, savedClientID, spotifyRedirectURL);
     // log_e("redirect uri: %s", redirect_uri);
     server.send(200, "text/html", String(page));
 }
 
 void handlePageCallback()
 {
+    char page[600];
     if (!spotconn.accessTokenSet)
     {
         if (server.arg("code") == "")
         { // Parameter not found
             log_e("No code found");
-            char page[600];
-            sprintf(page, errorPage, savedClientID, spotifyRedirectURLFormatted);
-            // log_e("redirect uri: %s", redirect_uri);
-            server.send(200, "text/html", String(page)); // Send web page
+            sprintf(page, errorPage, "No code found");
         }
         else
         { // Parameter found
@@ -345,20 +334,20 @@ void handlePageCallback()
             spotconn.setClientCredentials(savedClientID, savedClientSecret);
             if (spotconn.getAuth(server.arg("code")))
             {
-                server.send(200, "text/html", "Spotify connected successfully <br>Authentication will be refreshed in: " + String(spotconn.tokenExpireTime / 60) + " minutes");
+                sprintf(page, successPage);
             }
             else
             {
-                char page[600];
-                sprintf(page, errorPage, savedClientID, spotifyRedirectURLFormatted);
-                server.send(200, "text/html", String(page)); // Send web page
+                log_e("Failed to get access token");
+                sprintf(page, errorPage, "Failed to get access token");
             }
         }
     }
     else
     {
-        server.send(200, "text/html", "Spotify setup complete");
+        sprintf(page, successPage);
     }
+    server.send(200, "text/html", String(page)); // Send web page
 }
 
 void taskRefreshSong(void *pvParameters)
@@ -530,8 +519,6 @@ void setup()
     log_d("Connected with IP: %s", WiFi.localIP().toString().c_str());
     currentStatus = DONE_WIFI;
 
-    sprintf(spotifyRedirectURLFormatted, spotifyRedirectURL, WiFi.localIP().toString().c_str());
-
     log_d("Getting credentials");
     currentStatus = INIT_CREDENTIALS;
 
@@ -569,13 +556,25 @@ void setup()
     }
     else
     {
+        log_d("Setting up MDNS responder");
+        if (!MDNS.begin("spotifybuddy"))
+        {
+            log_e("Error setting up MDNS responder!");
+            currentError = "Error setting up MDNS responder!";
+            currentStatus = ERROR;
+            assert(false);
+        }
+        else
+        {
+            log_d("mDNS responder started");
+        }
         log_d("Starting auth server");
         server.on("/", handlePageRoot);
         server.on("/wifisave", handlePageRoot);
         server.on("/callback", handlePageCallback);
         server.begin();
 
-        log_d("Go to http://%s in your browser (or refresh if already there)\nTo verify your spotify account.", WiFi.localIP().toString().c_str());
+        log_d("Go to http://spotifybuddy.local in your browser to verify your spotify account.");
 
         while (!spotconn.accessTokenSet)
         {
@@ -699,11 +698,13 @@ void loop()
             }
         }
 
+#if PRINT_USAGES
         if (millis() - lastUsagePrint > 5000)
         {
             printUsages();
             lastUsagePrint = millis();
         }
+#endif
     }
     else
     {

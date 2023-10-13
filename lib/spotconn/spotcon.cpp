@@ -281,9 +281,27 @@ bool SpotConn::parseSong(String &json)
 
 bool SpotConn::parseInfo(String &json)
 {
-    DynamicJsonDocument doc(12288);
+    StaticJsonDocument<1024> filter;
 
-    DeserializationError error = deserializeJson(doc, json);
+    JsonObject filter_device = filter.createNestedObject("device");
+    filter_device["id"] = true;
+    filter_device["name"] = true;
+    filter_device["is_active"] = true;
+    filter_device["is_restricted"] = true;
+    filter_device["supports_volume"] = true;
+
+    JsonObject filter_item = filter.createNestedObject("item");
+    filter_item["id"] = true;
+    filter_item["name"] = true;
+    filter_item["artists"] = true;
+    filter_item["album"] = true;
+    filter_item["duration_ms"] = true;
+
+    filter["progress_ms"] = true;
+
+    StaticJsonDocument<2048> doc;
+
+    DeserializationError error = deserializeJson(doc, json, DeserializationOption::Filter(filter));
     if (error)
     {
         log_e("Error parsing song: %s", error.c_str());
@@ -291,17 +309,19 @@ bool SpotConn::parseInfo(String &json)
         return false;
     }
 
-    currentDevice.id = doc["device"]["id"].as<String>();
-    currentDevice.name = doc["device"]["name"].as<String>();
-    currentDevice.isActive = doc["device"]["is_active"].as<bool>();
-    currentDevice.isRestricted = doc["device"]["is_restricted"].as<bool>();
-    currentDevice.supportsVolume = doc["device"]["supports_volume"].as<bool>();
+    JsonObject device = doc["device"];
+    currentDevice.id = device["id"].as<String>();
+    currentDevice.name = device["name"].as<String>();
+    currentDevice.isActive = device["is_active"].as<bool>();
+    currentDevice.isRestricted = device["is_restricted"].as<bool>();
+    currentDevice.supportsVolume = device["supports_volume"].as<bool>();
 
-    currentSong.Id = doc["item"]["id"].as<String>();
-    currentSong.song = doc["item"]["name"].as<String>();
-    currentSong.artist = doc["item"]["artists"][0]["name"].as<String>();
-    currentSong.album = doc["item"]["album"]["name"].as<String>();
-    currentSong.durationMs = doc["item"]["duration_ms"].as<int>();
+    JsonObject item = doc["item"];
+    currentSong.Id = item["id"].as<String>();
+    currentSong.song = item["name"].as<String>();
+    currentSong.artist = item["artists"][0]["name"].as<String>();
+    currentSong.album = item["album"]["name"].as<String>();
+    currentSong.durationMs = item["duration_ms"].as<int>();
 
     currentSongPositionMs = doc["progress_ms"].as<float>();
 
