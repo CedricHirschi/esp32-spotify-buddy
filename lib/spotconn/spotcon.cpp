@@ -27,9 +27,8 @@ void SpotConn::setTokens(const char *accessToken, const char *refreshToken)
     this->refreshToken = refreshToken;
 }
 
-bool SpotConn::getAuth(String serverCode)
+bool SpotConn::getAuth(String serverCode, const char *redirectUri)
 {
-    sprintf(redirect_uri, "http://%s/callback", WiFi.localIP().toString().c_str());
     https.begin(*client, F("https://accounts.spotify.com/api/token"));
     String clientCreds = clientID;
     clientCreds += ":";
@@ -41,7 +40,7 @@ bool SpotConn::getAuth(String serverCode)
     requestBody = "grant_type=authorization_code&code=";
     requestBody += serverCode;
     requestBody += "&redirect_uri=";
-    requestBody += redirect_uri;
+    requestBody += redirectUri;
     // Send the POST request to the Spotify API
     int httpResponseCode = https.POST(requestBody);
     // Check if the request was successful

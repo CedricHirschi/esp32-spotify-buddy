@@ -1,5 +1,5 @@
-#define CORE_DEBUG_LEVEL 5 // 0: None, 1: Error, 2: Warning, 3: Info, 4: Debug, 5: Verbose
-#define CONFIG_ARDUHAL_LOG_COLORS 0
+#define CORE_DEBUG_LEVEL 3          // What debug level to use for the logging (0: None, 1: Error, 2: Warning, 3: Info, 4: Debug, 5: Verbose)
+#define CONFIG_ARDUHAL_LOG_COLORS 1 // Set to 1 to enable colors in the logging
 
 #include <Arduino.h>
 
@@ -12,6 +12,9 @@
 #include <U8g2lib.h>
 #include <SPI.h>
 
+#include "config.h"
+#define MDNS_ADDR_STR "http://" MDNS_HOSTNAME ".local"
+#include "status.h"
 #include "index.h"
 #include "spotconn.h"
 #include "debutton.h"
@@ -19,9 +22,6 @@
 #include "nvshandler.h"
 #include "scrollingtext.h"
 #include "timeformats.h"
-
-#include "config.h"
-#include "status.h"
 
 #define STACK_SIZE_DISPLAY 3000
 #define STACK_SIZE_REFRESH_SONG 6500
@@ -32,28 +32,28 @@
 #define CORE_TASK_REFRESH_SONG 1
 #define CORE_TASK_LOOP 1
 
-const char spotifyRedirectURL[100] = "http://spotifybuddy.local/callback";
 const char *savedClientID;
 const char *savedClientSecret;
 
-U8G2_DISPLAY
 WebServer server(80);
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", UTC_OFFSET_S);
+SpotConn spotconn;
+WiFiManager wifiManager;
+
+WiFiManagerParameter clientIDParameter("clientID", "Spotify clientID", "", 32);
+WiFiManagerParameter clientSecretParameter("clientSecret", "Spotify clientSecret", "", 32);
+
+U8G2_DISPLAY
 DebouncedButton backwardButton(PIN_BACKWARD_BUTTON, BUTTON_DEBOUNCE_TIME);
 DebouncedButton playButton(PIN_PLAY_BUTTON, BUTTON_DEBOUNCE_TIME);
 DebouncedButton forwardButton(PIN_FORWARD_BUTTON, BUTTON_DEBOUNCE_TIME);
 #if HAS_VOLUME_POTENTIOMETER
 FilteredAnalog volumePot(PIN_VOLUME_POTENTIOMETER, POTENTIOMETER_FILTER_COEFFICIENT);
 #endif
-SpotConn spotconn;
-WiFiManager wifiManager;
 
 currentStatus_t currentStatus = NONE;
 String currentError;
-
-WiFiManagerParameter clientIDParameter("clientID", "Spotify clientID", "", 32);
-WiFiManagerParameter clientSecretParameter("clientSecret", "Spotify clientSecret", "", 32);
 
 SemaphoreHandle_t httpMutex = xSemaphoreCreateMutex();
 TaskHandle_t taskDisplayHandle = NULL;
@@ -82,11 +82,32 @@ void IRAM_ATTR isrBackwardButton() { backwardButton.update(); }
 void IRAM_ATTR isrPlayButton() { playButton.update(); }
 void IRAM_ATTR isrForwardButton() { forwardButton.update(); }
 
+void startMDNS()
+{
+    log_d("Setting up MDNS responder");
+    if (!MDNS.begin(MDNS_HOSTNAME))
+    {
+        log_e("Error setting up MDNS responder!");
+        currentError = "Error setting up MDNS responder!";
+        currentStatus = ERROR;
+        assert(false);
+    }
+    else
+    {
+        log_d("mDNS responder started");
+    }
+}
+
+bool clientDefined()
+{
+    return savedClientID != NULL && savedClientSecret != NULL && strcmp(savedClientID, "null") != 0 && strcmp(savedClientSecret, "null") != 0 && strlen(savedClientID) > 0 && strlen(savedClientSecret) > 0;
+}
+
 void setup()
 {
     if (detectReset())
     {
-        log_e("Settings reset detected");
+        log_w("Settings reset detected");
 
         NVSHandler nvsHandler;
 
@@ -95,7 +116,7 @@ void setup()
         nvsHandler.set("refreshToken", "null");
         wifiManager.resetSettings();
 
-        log_e("Erased all saved data");
+        log_w("Erased all saved data");
     }
 
     log_d("Setting up display task");
@@ -113,13 +134,13 @@ void setup()
     savedClientID = nvsHandler.get("clientID");
     savedClientSecret = nvsHandler.get("clientSecret");
 
-    log_d("Connecting to WiFi");
+    log_i("Connecting to WiFi");
     currentStatus = INIT_WIFI;
 
     wifiManager.setDebugOutput(false);
-    wifiManager.setCaptivePortalEnable(true);
+    wifiManager.setCaptivePortalEnable(false);
 
-    if (savedClientID == NULL || savedClientSecret == NULL)
+    if (!clientDefined())
     {
         wifiManager.addParameter(&clientIDParameter);
         wifiManager.addParameter(&clientSecretParameter);
@@ -127,48 +148,46 @@ void setup()
 
     wifiManager.setSaveParamsCallback(configStopCallback);
     wifiManager.setSaveConfigCallback(configStopCallback);
+    wifiManager.setAPCallback([](WiFiManager *wifiManager)
+                              {
+        log_w("Connect to WiFi '" MDNS_HOSTNAME " Setup' and go to");
+        log_w(MDNS_ADDR_STR);
+        if (!clientDefined())
+            log_w("to set up WiFi and Spotify");
+        else
+            log_w("to set up WiFi");
+        startMDNS(); });
 
-    if (!wifiManager.autoConnect("Spotify Connect Setup"))
+    if (!wifiManager.autoConnect(MDNS_HOSTNAME " Setup"))
     {
         log_e("Failed to connect to WiFi, restarting (hit timeout)");
         ESP.restart();
         delay(1000);
     }
 
-    log_d("Connected with IP: %s", WiFi.localIP().toString().c_str());
-    currentStatus = DONE_WIFI;
-
-    log_d("Getting credentials");
-    currentStatus = INIT_CREDENTIALS;
-
-    if (savedClientID == NULL || savedClientSecret == NULL)
-    {
-        log_w("Please enter clientID and clientSecret in the captive portal");
-
-        wifiManager.addParameter(&clientIDParameter);
-        wifiManager.addParameter(&clientSecretParameter);
-
-        wifiManager.startConfigPortal("Spotify Buddy Setup");
-    }
-
     savedClientID = nvsHandler.get("clientID");
     savedClientSecret = nvsHandler.get("clientSecret");
 
-    log_d("Done getting credentials");
-    currentStatus = DONE_CREDENTIALS;
+    log_i("Connected to '%s' with IP: %s", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    currentStatus = DONE_WIFI;
 
     log_d("Setting up authorization");
     currentStatus = INIT_AUTHORIZATION;
 
     char savedRefreshToken[255];
     char savedAccessToken[255];
-    nvsHandler.get("refreshToken", savedRefreshToken, sizeof(savedRefreshToken));
-    nvsHandler.get("accessToken", savedAccessToken, sizeof(savedAccessToken));
+    if (!nvsHandler.get("refreshToken", savedRefreshToken, sizeof(savedRefreshToken)) || !nvsHandler.get("accessToken", savedAccessToken, sizeof(savedAccessToken)))
+    {
+        log_d("No saved tokens found");
+        savedAccessToken[0] = '\0';
+        savedRefreshToken[0] = '\0';
+    }
 
-    if (savedAccessToken != NULL && savedRefreshToken != NULL && strcmp(savedAccessToken, "null") != 0 && strcmp(savedRefreshToken, "null") != 0)
+    if (!clientDefined())
     {
         log_d("Found saved access and refresh tokens:");
         log_d("%s / %s\n", savedAccessToken, savedRefreshToken);
+        log_d("sizes: %u / %u\n", strlen(savedAccessToken), strlen(savedRefreshToken));
         log_d("Using client credentials:");
         log_d("%s / %s\n", savedClientID, savedClientSecret);
 
@@ -182,18 +201,7 @@ void setup()
     }
     else
     {
-        log_d("Setting up MDNS responder");
-        if (!MDNS.begin("spotifybuddy"))
-        {
-            log_e("Error setting up MDNS responder!");
-            currentError = "Error setting up MDNS responder!";
-            currentStatus = ERROR;
-            assert(false);
-        }
-        else
-        {
-            log_d("mDNS responder started");
-        }
+        startMDNS();
 
         log_d("Starting auth server");
         server.on("/", handlePageRoot);
@@ -201,7 +209,9 @@ void setup()
         server.on("/callback", handlePageCallback);
         server.begin();
 
-        log_w("Go to http://spotifybuddy.local in your browser to verify your spotify account.");
+        log_w("Go to");
+        log_w(MDNS_ADDR_STR);
+        log_w("in your browser to verify your Spotify account");
 
         while (!spotconn.accessTokenSet)
         {
@@ -322,7 +332,7 @@ void loop()
             }
             else
             {
-                log_d("failed to refresh token");
+                log_e("failed to refresh token");
                 currentStatus = ERROR;
                 currentError = "Failed to refresh token";
             }
@@ -348,7 +358,7 @@ bool detectReset()
 {
     pinMode(PIN_RESET_SETTINGS, INPUT_PULLUP);
     delay(10);
-    bool reset = digitalRead(PIN_RESET_SETTINGS) == LOW;
+    bool reset = digitalRead(PIN_RESET_SETTINGS) == PIN_RESET_ACTIVE;
     pinMode(PIN_RESET_SETTINGS, INPUT);
     return reset;
 }
@@ -412,18 +422,18 @@ void displaySong()
 void printUsages()
 {
     // print usages of all tasks
-    log_e("================================================================================");
+    log_v("================================================================================");
 
     auto displayTaskUsage = uxTaskGetStackHighWaterMark(taskDisplayHandle);
     auto serveTaskUsage = uxTaskGetStackHighWaterMark(taskServeHandle);
     auto refreshSongTaskUsage = uxTaskGetStackHighWaterMark(taskRefreshSongHandle);
     auto loopTaskUsage = uxTaskGetStackHighWaterMark(NULL);
 
-    log_e("Display task usage:      [%.2f%%]", (float)(STACK_SIZE_DISPLAY - displayTaskUsage) / STACK_SIZE_DISPLAY * 100);
-    log_e("Refresh song task usage: [%.2f%%]", (float)(STACK_SIZE_REFRESH_SONG - refreshSongTaskUsage) / STACK_SIZE_REFRESH_SONG * 100);
-    log_e("Loop task usage:         [%.2f%%]", (float)(STACK_SIZE_LOOP - loopTaskUsage) / STACK_SIZE_LOOP * 100);
+    log_v("Display task usage:      [%.2f%%]", (float)(STACK_SIZE_DISPLAY - displayTaskUsage) / STACK_SIZE_DISPLAY * 100);
+    log_v("Refresh song task usage: [%.2f%%]", (float)(STACK_SIZE_REFRESH_SONG - refreshSongTaskUsage) / STACK_SIZE_REFRESH_SONG * 100);
+    log_v("Loop task usage:         [%.2f%%]", (float)(STACK_SIZE_LOOP - loopTaskUsage) / STACK_SIZE_LOOP * 100);
 
-    log_e("--------------------------------------------------------------------------------");
+    log_v("--------------------------------------------------------------------------------");
 
     // print heap and psram
     auto freePSRAM = ESP.getMinFreePsram();
@@ -441,16 +451,16 @@ void printUsages()
     // print used space in percent
     if (maxPSRAM > 0)
     {
-        log_e("Used PSRAM:      %.2f%%", (float)(maxPSRAM - freePSRAM) / maxPSRAM * 100);
-        log_e("Max alloc PSRAM: %d kB", maxAllocPSRAM / 1024);
+        log_v("Used PSRAM:      %.2f%%", (float)(maxPSRAM - freePSRAM) / maxPSRAM * 100);
+        log_v("Max alloc PSRAM: %d kB", maxAllocPSRAM / 1024);
     }
-    log_e("Used Heap:       %.2f%%", (float)(maxHeap - freeHeap) / maxHeap * 100);
-    log_e("Max alloc Heap:  %d kB", maxAllocHeap / 1024);
+    log_v("Used Heap:       %.2f%%", (float)(maxHeap - freeHeap) / maxHeap * 100);
+    log_v("Max alloc Heap:  %d kB", maxAllocHeap / 1024);
     // log_d("Used Sketch: %.2f%%", (float)(maxSketch - freeSketch) / maxSketch * 100);
-    log_e("--------------------------------------------------------------------------------");
-    log_e("Loop running on core %d", xPortGetCoreID());
+    log_v("--------------------------------------------------------------------------------");
+    log_v("Loop running on core %d", xPortGetCoreID());
 
-    log_e("================================================================================");
+    log_v("================================================================================");
 }
 
 void taskDisplay(void *pvParameters)
@@ -473,7 +483,6 @@ void taskDisplay(void *pvParameters)
         case DONE_SERVER:
         case INIT_PINS:
         case DONE_PINS:
-        case DONE_CREDENTIALS:
         case DONE_AUTHORIZATION:
         case INIT_SONG_REFRESH:
         case DONE_SONG_REFRESH:
@@ -481,33 +490,23 @@ void taskDisplay(void *pvParameters)
         case DONE_BUTTONS:
             u8g2.drawStr(0, 10, "Setup");
             u8g2.drawStr(0, 20, "Status:");
-            u8g2.drawStr(0, 30, statusStrings[currentStatus]);
-            break;
-        case INIT_CREDENTIALS:
-            u8g2.drawStr(0, 10, "Go to");
-            u8g2.drawStr(0, 20, "http://spotifybuddy.local");
-            u8g2.drawStr(0, 30, "in your browser and");
-            u8g2.drawStr(0, 40, "enter your Spotify");
-            u8g2.drawStr(0, 50, "credentials");
+            u8g2.drawStr(0, 30, STATUS_STR(currentStatus));
             break;
         case NOT_AUTHORIZED:
         case INIT_AUTHORIZATION:
             u8g2.drawStr(0, 10, "Go to");
-            u8g2.drawStr(0, 20, "http://spotifybuddy.local");
+            u8g2.drawStr(0, 20, MDNS_ADDR_STR);
             u8g2.drawStr(0, 30, "in your browser");
             u8g2.drawStr(0, 40, "to authorize Spotify");
             break;
         case INIT_WIFI:
             u8g2.drawStr(0, 10, "Connect to WiFi");
-            u8g2.drawStr(0, 20, "'Spotify Connect Setup'");
+            u8g2.drawStr(0, 20, "'" MDNS_HOSTNAME " Setup'");
             u8g2.drawStr(0, 30, "and go to");
-            u8g2.setCursor(0, 40);
-            u8g2.printf("http://%s", WiFi.softAPIP().toString().c_str());
+            u8g2.drawStr(0, 40, MDNS_ADDR_STR);
             u8g2.drawStr(0, 50, "to set up WiFi");
-            if (savedClientID == NULL || savedClientSecret == NULL)
-            {
+            if (!clientDefined())
                 u8g2.drawStr(0, 60, "and Spotify");
-            }
             break;
         case DONE_SETUP:
         case NO_SONG:
@@ -578,14 +577,14 @@ void taskRefreshSong(void *pvParameters)
 
 void configStopCallback()
 {
-    if (savedClientID == NULL)
+    if (savedClientID == NULL || savedClientSecret == "" || strcmp(savedClientSecret, "null") == 0)
     {
         auto enteredClientID = clientIDParameter.getValue();
-        log_d("Entered clientID: %s\n", enteredClientID);
+        log_d("Entered clientID: %s", enteredClientID);
 
         if (strlen(enteredClientID) != 32)
         {
-            log_e("ClientID should be of length 32");
+            log_w("ClientID should be of length 32");
             return;
         }
 
@@ -593,7 +592,7 @@ void configStopCallback()
         {
             if (!isxdigit(enteredClientID[i]))
             {
-                log_e("ClientID should only contain hex characters");
+                log_w("ClientID should only contain hex characters");
                 return;
             }
         }
@@ -604,14 +603,14 @@ void configStopCallback()
         log_d("Saved clientID");
     }
 
-    if (savedClientSecret == NULL)
+    if (savedClientSecret == NULL || savedClientSecret == "" || strcmp(savedClientSecret, "null") == 0)
     {
         auto enteredClientSecret = clientSecretParameter.getValue();
-        log_d("Entered clientSecret: %s\n", enteredClientSecret);
+        log_d("Entered clientSecret: %s", enteredClientSecret);
 
         if (strlen(enteredClientSecret) != 32)
         {
-            log_e("ClientSecret should be of length 32");
+            log_w("ClientSecret should be of length 32");
             return;
         }
 
@@ -619,7 +618,7 @@ void configStopCallback()
         {
             if (!isxdigit(enteredClientSecret[i]))
             {
-                log_e("ClientSecret should only contain hex characters");
+                log_w("ClientSecret should only contain hex characters");
                 return;
             }
         }
@@ -630,16 +629,13 @@ void configStopCallback()
         log_d("Saved clientSecret");
     }
 
-    log_d("Restarting ESP, please refresh the page after approx 10 seconds");
-
-    ESP.restart();
-    delay(1000);
+    // log_d("Restarting ESP, please refresh the page after approx 10 seconds");
 }
 
 void handlePageRoot()
 {
     char page[600];
-    sprintf(page, mainPage, savedClientID, spotifyRedirectURL);
+    sprintf(page, mainPage, savedClientID, MDNS_ADDR_STR "/callback");
     // log_e("redirect uri: %s", redirect_uri);
     server.send(200, "text/html", String(page));
 }
@@ -658,7 +654,7 @@ void handlePageCallback()
         { // Parameter found
             log_d("Code found");
             spotconn.setClientCredentials(savedClientID, savedClientSecret);
-            if (spotconn.getAuth(server.arg("code")))
+            if (spotconn.getAuth(server.arg("code"), MDNS_ADDR_STR "/callback"))
             {
                 sprintf(page, successPage);
             }

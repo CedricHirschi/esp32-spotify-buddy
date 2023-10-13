@@ -1,6 +1,8 @@
 #ifndef _STATUS_H
 #define _STATUS_H
 
+#define STATUS_STR(status) #status
+
 typedef enum currentStatus_e
 {
     NONE,
@@ -10,8 +12,6 @@ typedef enum currentStatus_e
     DONE_SERVER,
     INIT_PINS,
     DONE_PINS,
-    INIT_CREDENTIALS,
-    DONE_CREDENTIALS,
     INIT_AUTHORIZATION,
     DONE_AUTHORIZATION,
     INIT_SONG_REFRESH,
@@ -24,24 +24,5 @@ typedef enum currentStatus_e
     NOT_AUTHORIZED,
     ERROR
 } currentStatus_t;
-
-char statusStrings[18][20] = {
-    "NONE",
-    "INIT_WIFI",
-    "DONE_WIFI",
-    "INIT_SERVER",
-    "DONE_SERVER",
-    "INIT_PINS",
-    "DONE_PINS",
-    "INIT_AUTH_REFRESH",
-    "DONE_AUTH_REFRESH",
-    "INIT_SONG_REFRESH",
-    "DONE_SONG_REFRESH",
-    "INIT_BUTTONS",
-    "DONE_BUTTONS",
-    "DONE_SETUP",
-    "NO_SONG",
-    "PLAYING_SONG",
-    "NOT_AUTHORIZED"};
 
 #endif // _STATUS_H

@@ -101,7 +101,7 @@ public:
      * @details Uses the server code from the Spotify API to get the access and refresh tokens
      *
      */
-    bool getAuth(String serverCode);
+    bool getAuth(String serverCode, const char *redirectUri);
     /**
      * @brief Refreshes the access token
      *

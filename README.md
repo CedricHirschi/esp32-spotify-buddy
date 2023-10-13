@@ -22,6 +22,7 @@ This project is for a Spotify controller using an ESP32 microcontroller. It uses
 ### Hardware Requirements
 - ESP32 microcontroller
 - Display compatible with `u8g2lib` ([compatibility list](https://github.com/olikraus/u8g2/wiki/u8g2setupcpp))
+    - **Tested:** SSD1309 (128x64 monochrome OLED)
 - Buttons and a potentiometer (optional) for controls
 
 ### Software Requirements
@@ -39,17 +40,22 @@ git clone https://github.com/CedricHirschi/spotify-buddy-esp32.git
 ```
 2. Open the project with PlatformIO
 3. Configure your project in [`include/config.h`](include/config.h)
-4. Connect your ESP32 to your computer (and also connect the peripherals to the ESP32 of course)
+4. Connect your ESP32 to your computer (also connect the peripherals to the ESP32 of course)
 5. [Build and Upload](https://docs.platformio.org/en/latest/integration/ide/vscode.html#quick-start) the code to your ESP32
+
+### Setup Spotify API
+1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard/) and create a new app
+2. Add `http://<MDNS_HOSTNAME>.local/callback` as a redirect URI when setting up (replace `<MDNS_HOSTNAME>` with the MDNS_HOSTNAME you set in [`include/config.h`](include/config.h#7), standard is `spotbud`)
+3. Note down the Client ID and Client Secret you get in the App Overview
 
 ### Connect to your device to WiFi and Spotify
 Basically, follow the instructions on the display of your ESP32:
 
-1. Connect to the WiFi network `Spotify Buddy Setup`
+1. Connect to the WiFi network `<MDNS_HOSTNAME> Setup`
 2. Open the displayed URL in your browser
-3. Go to WiFi configuration and enter your WiFi and Spotify credentials
+3. Go to `WiFi configuration` and enter your WiFi and Spotify credentials
 4. Confirm and wait until the ESP32 reboots
-5. Now, once you connect yourself to the same WiFi network as the ESP32, you can access the web interface at the displayed URL
+5. Now, once you connect yourself to the same WiFi network as the ESP32, you authorize the device via the once again displayed URL (the same as before)
 7. Wait until you get redirected and authorize the app to access your Spotify account
 
 **Your device should now be ready to use**
@@ -64,10 +70,10 @@ If no playback is active, a clock is displayed instead.
 To control the playback, use the buttons and potentiometer connected to the ESP32.
 
 ### Reset
-If you want to be able to reset the device, `CLEAR_ON_DOUBLE_RESET` in [`include/config.h`](include/config.h#22) must be set to `true`. Then, you can reset the device by clicking the button once again before the onboard LED turns off.
+To reset your credentials (WiFi and Spotify), you can bring `PIN_RESET_SETTINGS` to `PIN_RESET_ACTIVE` while you reset the ESP32. This will reset the credentials and you can connect to a new WiFi network and authorize the app again.
 
 ### Connecting to a new WiFi network
-If you want to connect to a new WiFi network, you just wait until the display prompts you to connect to the WiFi network `Spotify Buddy Setup` again. Now, you can enter the new WiFi credentials.
+If you want to connect to a new WiFi network, you just wait until the display prompts you to connect to the WiFi network `<MDNS_HOSTNAME> Setup` again. Now, you can enter the new WiFi credentials.
 
 **Note:** Your Spotify credentials are kept, you shouldn't need to re-enter them.
 
