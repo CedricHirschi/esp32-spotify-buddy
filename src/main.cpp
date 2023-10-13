@@ -522,8 +522,11 @@ void setup()
     log_d("Getting credentials");
     currentStatus = INIT_CREDENTIALS;
 
-    auto savedRefreshToken = nvsHandler.get("refreshToken");
-    auto savedAccessToken = nvsHandler.get("accessToken");
+    char savedRefreshToken[100];
+    char savedAccessToken[100];
+
+    nvsHandler.get("refreshToken", savedRefreshToken, sizeof(savedRefreshToken));
+    nvsHandler.get("accessToken", savedAccessToken, sizeof(savedAccessToken));
 
     if (savedClientID == NULL || savedClientSecret == NULL)
     {
