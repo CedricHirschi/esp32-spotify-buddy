@@ -60,7 +60,291 @@ TaskHandle_t taskDisplayHandle = NULL;
 TaskHandle_t taskServeHandle = NULL;
 TaskHandle_t taskRefreshSongHandle = NULL;
 
-bool detect_reset()
+ScrollingText songName(u8g2, 10, DISPLAY_REFRESH_RATE);
+ScrollingText artistName(u8g2, 21, DISPLAY_REFRESH_RATE);
+ScrollingText albumName(u8g2, 31, DISPLAY_REFRESH_RATE);
+
+bool detectReset();
+void printUsages();
+
+void displaySong();
+void displayClock();
+
+void taskDisplay(void *pvParameters);
+void taskRefreshSong(void *pvParameters);
+
+void configStopCallback();
+
+void handlePageRoot();
+void handlePageCallback();
+
+void IRAM_ATTR isrBackwardButton() { backwardButton.update(); }
+void IRAM_ATTR isrPlayButton() { playButton.update(); }
+void IRAM_ATTR isrForwardButton() { forwardButton.update(); }
+
+void setup()
+{
+    if (detectReset())
+    {
+        log_e("Settings reset detected");
+
+        NVSHandler nvsHandler;
+
+        nvsHandler.eraseAll();
+        nvsHandler.set("accessToken", "null");
+        nvsHandler.set("refreshToken", "null");
+        wifiManager.resetSettings();
+
+        log_e("Erased all saved data");
+    }
+
+    log_d("Setting up display task");
+    xTaskCreatePinnedToCore(
+        taskDisplay,        /* Task function. */
+        "TaskDisplay",      /* String with name of task. */
+        STACK_SIZE_DISPLAY, /* Stack size in bytes. */
+        NULL,               /* Parameter passed as input of the task */
+        2,                  /* Priority of the task. */
+        &taskDisplayHandle,
+        CORE_TASK_DISPLAY);
+    log_d("Set up display task");
+
+    NVSHandler nvsHandler;
+    savedClientID = nvsHandler.get("clientID");
+    savedClientSecret = nvsHandler.get("clientSecret");
+
+    log_d("Connecting to WiFi");
+    currentStatus = INIT_WIFI;
+
+    wifiManager.setDebugOutput(false);
+    wifiManager.setCaptivePortalEnable(true);
+
+    if (savedClientID == NULL || savedClientSecret == NULL)
+    {
+        wifiManager.addParameter(&clientIDParameter);
+        wifiManager.addParameter(&clientSecretParameter);
+    }
+
+    wifiManager.setSaveParamsCallback(configStopCallback);
+    wifiManager.setSaveConfigCallback(configStopCallback);
+
+    if (!wifiManager.autoConnect("Spotify Connect Setup"))
+    {
+        log_e("Failed to connect to WiFi, restarting (hit timeout)");
+        ESP.restart();
+        delay(1000);
+    }
+
+    log_d("Connected with IP: %s", WiFi.localIP().toString().c_str());
+    currentStatus = DONE_WIFI;
+
+    log_d("Getting credentials");
+    currentStatus = INIT_CREDENTIALS;
+
+    if (savedClientID == NULL || savedClientSecret == NULL)
+    {
+        log_w("Please enter clientID and clientSecret in the captive portal");
+
+        wifiManager.addParameter(&clientIDParameter);
+        wifiManager.addParameter(&clientSecretParameter);
+
+        wifiManager.startConfigPortal("Spotify Buddy Setup");
+    }
+
+    savedClientID = nvsHandler.get("clientID");
+    savedClientSecret = nvsHandler.get("clientSecret");
+
+    log_d("Done getting credentials");
+    currentStatus = DONE_CREDENTIALS;
+
+    log_d("Setting up authorization");
+    currentStatus = INIT_AUTHORIZATION;
+
+    char savedRefreshToken[100];
+    char savedAccessToken[100];
+    nvsHandler.get("refreshToken", savedRefreshToken, sizeof(savedRefreshToken));
+    nvsHandler.get("accessToken", savedAccessToken, sizeof(savedAccessToken));
+
+    if (savedAccessToken != NULL && savedRefreshToken != NULL && strcmp(savedAccessToken, "null") != 0 && strcmp(savedRefreshToken, "null") != 0)
+    {
+        log_d("Found saved access and refresh tokens:");
+        log_d("%s / %s\n", savedAccessToken, savedRefreshToken);
+        log_d("Using client credentials:");
+        log_d("%s / %s\n", savedClientID, savedClientSecret);
+
+        spotconn.setTokens(savedAccessToken, savedRefreshToken);
+        spotconn.setClientCredentials(savedClientID, savedClientSecret);
+        spotconn.accessTokenSet = true;
+
+        log_d("Refreshing auth");
+        spotconn.refreshAuth();
+        log_d("Auth refreshed");
+    }
+    else
+    {
+        log_d("Setting up MDNS responder");
+        if (!MDNS.begin("spotifybuddy"))
+        {
+            log_e("Error setting up MDNS responder!");
+            currentError = "Error setting up MDNS responder!";
+            currentStatus = ERROR;
+            assert(false);
+        }
+        else
+        {
+            log_d("mDNS responder started");
+        }
+
+        log_d("Starting auth server");
+        server.on("/", handlePageRoot);
+        server.on("/wifisave", handlePageRoot);
+        server.on("/callback", handlePageCallback);
+        server.begin();
+
+        log_w("Go to http://spotifybuddy.local in your browser to verify your spotify account.");
+
+        while (!spotconn.accessTokenSet)
+        {
+            server.handleClient();
+        }
+
+        log_d("Stopping auth server");
+
+        server.stop();
+
+        NVSHandler nvsHandler;
+        nvsHandler.set("accessToken", spotconn.accessToken.c_str());
+        nvsHandler.set("refreshToken", spotconn.refreshToken.c_str());
+
+        log_d("Saved access and refresh tokens:");
+        log_d("%s / %s\n", spotconn.accessToken.c_str(), spotconn.refreshToken.c_str());
+    }
+
+    log_d("Done authorizing");
+    currentStatus = DONE_AUTHORIZATION;
+
+    log_d("Setting up pins");
+    currentStatus = INIT_PINS;
+
+    pinMode(PIN_BACKWARD_BUTTON, INPUT_PULLUP);
+    pinMode(PIN_PLAY_BUTTON, INPUT_PULLUP);
+    pinMode(PIN_FORWARD_BUTTON, INPUT_PULLUP);
+
+    attachInterrupt(PIN_BACKWARD_BUTTON, isrBackwardButton, CHANGE);
+    attachInterrupt(PIN_PLAY_BUTTON, isrPlayButton, CHANGE);
+    attachInterrupt(PIN_FORWARD_BUTTON, isrForwardButton, CHANGE);
+
+    log_d("Set up pins");
+    currentStatus = DONE_PINS;
+
+    log_d("Setting up refresh song task");
+    currentStatus = INIT_SONG_REFRESH;
+
+    xTaskCreatePinnedToCore(
+        taskRefreshSong,         /* Task function. */
+        "TaskRefreshSong",       /* String with name of task. */
+        STACK_SIZE_REFRESH_SONG, /* Stack size in bytes. */
+        NULL,                    /* Parameter passed as input of the task */
+        3,                       /* Priority of the task. */
+        &taskRefreshSongHandle,
+        CORE_TASK_REFRESH_SONG);
+
+    log_d("Set up refresh song task");
+    currentStatus = DONE_SONG_REFRESH;
+
+    log_d("Setup done");
+    currentStatus = DONE_SETUP;
+}
+
+unsigned long lastUsagePrint = 0;
+
+void loop()
+{
+    if (spotconn.accessTokenSet)
+    {
+        if (backwardButton.wasPressed())
+        {
+            log_d("backward button pressed");
+            if (xSemaphoreTake(httpMutex, 5000))
+            {
+                spotconn.skipBack();
+                xSemaphoreGive(httpMutex);
+            }
+        }
+        else if (playButton.wasPressed())
+        {
+            log_d("play button pressed");
+            if (xSemaphoreTake(httpMutex, 5000))
+            {
+                spotconn.togglePlay();
+                xSemaphoreGive(httpMutex);
+            }
+        }
+        else if (forwardButton.wasPressed())
+        {
+            log_d("forward button pressed");
+            if (xSemaphoreTake(httpMutex, 5000))
+            {
+                spotconn.skipForward();
+                xSemaphoreGive(httpMutex);
+            }
+        }
+
+#if HAS_VOLUME_POTENTIOMETER
+        int requestedVolume = map(volumePot.read(), 0, 4095, 0, 100);
+
+        if (abs(requestedVolume - spotconn.currVol) > 5)
+        {
+            log_d("adjusting volume from %d to %d", spotconn.currVol, requestedVolume);
+            if (xSemaphoreTake(httpMutex, 1000))
+            {
+                spotconn.adjustVolume(requestedVolume);
+                xSemaphoreGive(httpMutex);
+            }
+        }
+#endif
+
+        if ((millis() - spotconn.tokenStartTime) / 1000 >= spotconn.tokenExpireTime - 1) // refresh token 1 second before it expires (just to be sure)
+        {
+            log_d("refreshing token");
+
+            bool result = false;
+
+            if (xSemaphoreTake(httpMutex, 1000))
+            {
+                result = spotconn.refreshAuth();
+                xSemaphoreGive(httpMutex);
+            }
+
+            if (result)
+            {
+                log_d("refreshed token");
+            }
+            else
+            {
+                log_d("failed to refresh token");
+                currentStatus = ERROR;
+                currentError = "Failed to refresh token";
+            }
+        }
+
+#if PRINT_USAGES
+        if (millis() - lastUsagePrint > 5000)
+        {
+            printUsages();
+            lastUsagePrint = millis();
+        }
+#endif
+    }
+    else
+    {
+        currentStatus = NOT_AUTHORIZED;
+    }
+
+    vTaskDelay(100);
+}
+
+bool detectReset()
 {
     pinMode(PIN_RESET_SETTINGS, INPUT_PULLUP);
     delay(10);
@@ -83,10 +367,6 @@ void displayClock()
     u8g2.setCursor((u8g2.getWidth() - u8g2.getStrWidth(time.c_str())) / 2, 45);
     u8g2.println(time);
 }
-
-ScrollingText songName(u8g2, 10, DISPLAY_REFRESH_RATE);
-ScrollingText artistName(u8g2, 21, DISPLAY_REFRESH_RATE);
-ScrollingText albumName(u8g2, 31, DISPLAY_REFRESH_RATE);
 
 void displaySong()
 {
@@ -250,6 +530,52 @@ void taskDisplay(void *pvParameters)
     }
 }
 
+void taskRefreshSong(void *pvParameters)
+{
+    while (true)
+    {
+        if (spotconn.accessTokenSet)
+        {
+            log_d("Getting track info");
+
+            bool status = false;
+
+            if (xSemaphoreTake(httpMutex, 1000))
+            {
+                status = spotconn.getInfo();
+                xSemaphoreGive(httpMutex);
+            }
+
+            if (status)
+            {
+                currentStatus = PLAYING_SONG;
+
+                if (spotconn.currentSong.song == "")
+                {
+                    currentStatus = NO_SONG;
+                    log_d("No song playing");
+                }
+                else
+                {
+                    log_d("Current song:");
+                    spotconn.currentSong.print();
+
+                    log_d("Current device:");
+                    spotconn.currentDevice.print();
+                }
+            }
+            else
+            {
+                log_e("Failed to get info");
+                currentStatus = ERROR;
+                currentError = "Failed to get info";
+            }
+        }
+
+        vTaskDelay(SONG_REFRESH_TIME / portTICK_PERIOD_MS);
+    }
+}
+
 void configStopCallback()
 {
     if (savedClientID == NULL)
@@ -348,371 +674,4 @@ void handlePageCallback()
         sprintf(page, successPage);
     }
     server.send(200, "text/html", String(page)); // Send web page
-}
-
-void taskRefreshSong(void *pvParameters)
-{
-    while (true)
-    {
-        if (spotconn.accessTokenSet)
-        {
-            log_d("Getting track info");
-
-            bool status = false;
-
-            // if (xSemaphoreTake(httpMutex, 1000))
-            // {
-            //     status = spotconn.getTrackInfo();
-            //     xSemaphoreGive(httpMutex);
-            // }
-
-            // if (status)
-            // {
-            //     currentStatus = PLAYING_SONG;
-
-            //     if (spotconn.currentSong.song == "")
-            //     {
-            //         currentStatus = NO_SONG;
-            //         log_d("No song playing");
-            //     }
-            //     else
-            //     {
-            //         log_d("Current song:");
-            //         spotconn.currentSong.print();
-
-            //         log_d("Getting device info");
-
-            //         if (xSemaphoreTake(httpMutex, 1000))
-            //         {
-            //             status = spotconn.getDeviceInfo();
-            //             xSemaphoreGive(httpMutex);
-            //         }
-
-            //         if (status)
-            //         {
-            //             log_d("Current device:");
-            //             spotconn.activeDevice.print();
-            //         }
-            //         else
-            //         {
-            //             log_e("Failed to get device info");
-            //             currentStatus = ERROR;
-            //             currentError = "Failed to get device info";
-            //         }
-            //     }
-
-            //     // log_d(spotconn.currentSong.song + " by " + spotconn.currentSong.artist);
-            //     // log_d(spotconn.currentSong.album + " - [" + spotconn.currentSongPositionMs + "/" + spotconn.currentSong.durationMs + "] ms");
-            // }
-            // else
-            // {
-            //     log_e("Failed to get track info");
-            //     currentStatus = ERROR;
-            //     currentError = "Failed to get track info";
-            // }
-
-            if (xSemaphoreTake(httpMutex, 1000))
-            {
-                status = spotconn.getInfo();
-                xSemaphoreGive(httpMutex);
-            }
-
-            if (status)
-            {
-                currentStatus = PLAYING_SONG;
-
-                if (spotconn.currentSong.song == "")
-                {
-                    currentStatus = NO_SONG;
-                    log_d("No song playing");
-                }
-                else
-                {
-                    log_d("Current song:");
-                    spotconn.currentSong.print();
-
-                    log_d("Current device:");
-                    spotconn.currentDevice.print();
-                }
-            }
-            else
-            {
-                log_e("Failed to get info");
-                currentStatus = ERROR;
-                currentError = "Failed to get info";
-            }
-        }
-
-        vTaskDelay(SONG_REFRESH_TIME / portTICK_PERIOD_MS);
-    }
-}
-
-void IRAM_ATTR isrBackwardButton()
-{
-    backwardButton.update();
-}
-
-void IRAM_ATTR isrPlayButton()
-{
-    playButton.update();
-}
-
-void IRAM_ATTR isrForwardButton()
-{
-    forwardButton.update();
-}
-
-unsigned long tokenRefreshMillis = 0;
-
-void setup()
-{
-    if (detect_reset())
-    {
-        log_e("Settings reset detected");
-
-        NVSHandler nvsHandler;
-
-        nvsHandler.eraseAll();
-        nvsHandler.set("accessToken", "null");
-        nvsHandler.set("refreshToken", "null");
-        wifiManager.resetSettings();
-
-        log_e("Erased all saved data");
-    }
-
-    log_d("Setting up display task");
-    xTaskCreatePinnedToCore(
-        taskDisplay,        /* Task function. */
-        "TaskDisplay",      /* String with name of task. */
-        STACK_SIZE_DISPLAY, /* Stack size in bytes. */
-        NULL,               /* Parameter passed as input of the task */
-        2,                  /* Priority of the task. */
-        &taskDisplayHandle,
-        CORE_TASK_DISPLAY);
-    log_d("Set up display task");
-
-    NVSHandler nvsHandler;
-    savedClientID = nvsHandler.get("clientID");
-    savedClientSecret = nvsHandler.get("clientSecret");
-
-    log_d("Connecting to WiFi");
-    currentStatus = INIT_WIFI;
-    wifiManager.setDebugOutput(false);
-    // wifiManager.setCaptivePortalEnable(true);
-    if (savedClientID == NULL)
-    {
-        wifiManager.addParameter(&clientIDParameter);
-    }
-    if (savedClientSecret == NULL)
-    {
-        wifiManager.addParameter(&clientSecretParameter);
-    }
-    wifiManager.setSaveParamsCallback(configStopCallback);
-    wifiManager.setSaveConfigCallback(configStopCallback);
-    if (!wifiManager.autoConnect("Spotify Connect Setup"))
-    {
-        log_e("Failed to connect to WiFi, restarting (hit timeout)");
-        ESP.restart();
-        delay(1000);
-    }
-    // log_d(WiFi.localIP());
-    log_d("Connected with IP: %s", WiFi.localIP().toString().c_str());
-    currentStatus = DONE_WIFI;
-
-    log_d("Getting credentials");
-    currentStatus = INIT_CREDENTIALS;
-
-    char savedRefreshToken[100];
-    char savedAccessToken[100];
-
-    nvsHandler.get("refreshToken", savedRefreshToken, sizeof(savedRefreshToken));
-    nvsHandler.get("accessToken", savedAccessToken, sizeof(savedAccessToken));
-
-    if (savedClientID == NULL || savedClientSecret == NULL)
-    {
-        log_e("Please enter clientID and clientSecret in the captive portal");
-        wifiManager.startConfigPortal("Spotify Buddy Setup");
-    }
-
-    savedClientID = nvsHandler.get("clientID");
-    savedClientSecret = nvsHandler.get("clientSecret");
-
-    log_d("Done getting credentials");
-    currentStatus = DONE_CREDENTIALS;
-
-    log_d("Setting up authorization");
-    currentStatus = INIT_AUTHORIZATION;
-
-    if (savedAccessToken != NULL && savedRefreshToken != NULL && strcmp(savedAccessToken, "null") != 0 && strcmp(savedRefreshToken, "null") != 0)
-    {
-        log_d("Found saved access and refresh tokens:");
-        log_d("%s / %s\n", savedAccessToken, savedRefreshToken);
-        log_d("Using client credentials:");
-        log_d("%s / %s\n", savedClientID, savedClientSecret);
-        spotconn.setTokens(savedAccessToken, savedRefreshToken);
-        spotconn.setClientCredentials(savedClientID, savedClientSecret);
-        spotconn.accessTokenSet = true;
-        log_d("Refreshing auth");
-        spotconn.refreshAuth();
-        log_d("Auth refreshed");
-        tokenRefreshMillis = millis();
-    }
-    else
-    {
-        log_d("Setting up MDNS responder");
-        if (!MDNS.begin("spotifybuddy"))
-        {
-            log_e("Error setting up MDNS responder!");
-            currentError = "Error setting up MDNS responder!";
-            currentStatus = ERROR;
-            assert(false);
-        }
-        else
-        {
-            log_d("mDNS responder started");
-        }
-        log_d("Starting auth server");
-        server.on("/", handlePageRoot);
-        server.on("/wifisave", handlePageRoot);
-        server.on("/callback", handlePageCallback);
-        server.begin();
-
-        log_d("Go to http://spotifybuddy.local in your browser to verify your spotify account.");
-
-        while (!spotconn.accessTokenSet)
-        {
-            server.handleClient();
-        }
-
-        log_d("Stopping auth server");
-
-        server.stop();
-
-        NVSHandler nvsHandler;
-        nvsHandler.set("accessToken", spotconn.accessToken.c_str());
-        nvsHandler.set("refreshToken", spotconn.refreshToken.c_str());
-
-        log_d("Saved access and refresh tokens:");
-        log_d("%s / %s\n", spotconn.accessToken.c_str(), spotconn.refreshToken.c_str());
-    }
-
-    log_d("Done authorizing");
-    currentStatus = DONE_AUTHORIZATION;
-
-    log_d("Setting up pins");
-    currentStatus = INIT_PINS;
-    pinMode(PIN_BACKWARD_BUTTON, INPUT_PULLUP);
-    pinMode(PIN_PLAY_BUTTON, INPUT_PULLUP);
-    pinMode(PIN_FORWARD_BUTTON, INPUT_PULLUP);
-    // pinMode(PIN_VOLUME_POTENTIOMETER, INPUT);
-
-    attachInterrupt(PIN_BACKWARD_BUTTON, isrBackwardButton, CHANGE);
-    attachInterrupt(PIN_PLAY_BUTTON, isrPlayButton, CHANGE);
-    attachInterrupt(PIN_FORWARD_BUTTON, isrForwardButton, CHANGE);
-    log_d("Set up pins");
-    currentStatus = DONE_PINS;
-
-    log_d("Setting up refresh song task");
-    currentStatus = INIT_SONG_REFRESH;
-    xTaskCreatePinnedToCore(
-        taskRefreshSong,         /* Task function. */
-        "TaskRefreshSong",       /* String with name of task. */
-        STACK_SIZE_REFRESH_SONG, /* Stack size in bytes. */
-        NULL,                    /* Parameter passed as input of the task */
-        3,                       /* Priority of the task. */
-        &taskRefreshSongHandle,
-        CORE_TASK_REFRESH_SONG);
-    log_d("Set up refresh song task");
-    currentStatus = DONE_SONG_REFRESH;
-
-    log_d("Setup done");
-    currentStatus = DONE_SETUP;
-}
-
-unsigned long lastUsagePrint = 0;
-
-void loop()
-{
-    if (spotconn.accessTokenSet)
-    {
-        if (backwardButton.wasPressed())
-        {
-            log_d("backward button pressed");
-            if (xSemaphoreTake(httpMutex, 5000))
-            {
-                spotconn.skipBack();
-                xSemaphoreGive(httpMutex);
-            }
-        }
-        else if (playButton.wasPressed())
-        {
-            log_d("play button pressed");
-            if (xSemaphoreTake(httpMutex, 5000))
-            {
-                spotconn.togglePlay();
-                xSemaphoreGive(httpMutex);
-            }
-        }
-        else if (forwardButton.wasPressed())
-        {
-            log_d("forward button pressed");
-            if (xSemaphoreTake(httpMutex, 5000))
-            {
-                spotconn.skipForward();
-                xSemaphoreGive(httpMutex);
-            }
-        }
-
-#if HAS_VOLUME_POTENTIOMETER
-        int requestedVolume = map(volumePot.read(), 0, 4095, 0, 100);
-
-        if (abs(requestedVolume - spotconn.currVol) > 5)
-        {
-            log_d("adjusting volume from %d to %d", spotconn.currVol, requestedVolume);
-            if (xSemaphoreTake(httpMutex, 1000))
-            {
-                spotconn.adjustVolume(requestedVolume);
-                xSemaphoreGive(httpMutex);
-            }
-        }
-#endif
-
-        if ((millis() - spotconn.tokenStartTime) / 1000 >= spotconn.tokenExpireTime - 1) // refresh token 1 second before it expires (just to be sure)
-        {
-            log_d("refreshing token");
-
-            bool result = false;
-
-            if (xSemaphoreTake(httpMutex, 1000))
-            {
-                result = spotconn.refreshAuth();
-                xSemaphoreGive(httpMutex);
-            }
-
-            if (result)
-            {
-                log_d("refreshed token");
-            }
-            else
-            {
-                log_d("failed to refresh token");
-                currentStatus = ERROR;
-                currentError = "Failed to refresh token";
-            }
-        }
-
-#if PRINT_USAGES
-        if (millis() - lastUsagePrint > 5000)
-        {
-            printUsages();
-            lastUsagePrint = millis();
-        }
-#endif
-    }
-    else
-    {
-        currentStatus = NOT_AUTHORIZED;
-    }
-
-    vTaskDelay(100);
 }
