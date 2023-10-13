@@ -50,4 +50,4 @@
 
 #define HAS_VOLUME_POTENTIOMETER true // Set to false if you don't have a volume potentiometer
 
-#define PRINT_USAGES false // Set to true to print the memory usage every 5 seconds
+#define PRINT_USAGES true // Set to true to print the memory usage every 5 seconds

@@ -281,7 +281,7 @@ bool SpotConn::parseSong(String &json)
 
 bool SpotConn::parseInfo(String &json)
 {
-    StaticJsonDocument<1024> filter;
+    DynamicJsonDocument filter(256);
 
     JsonObject filter_device = filter.createNestedObject("device");
     filter_device["id"] = true;
@@ -298,8 +298,11 @@ bool SpotConn::parseInfo(String &json)
     filter_item["duration_ms"] = true;
 
     filter["progress_ms"] = true;
+    filter["is_playing"] = true;
 
-    StaticJsonDocument<2048> doc;
+    filter.shrinkToFit();
+
+    DynamicJsonDocument doc(8096);
 
     DeserializationError error = deserializeJson(doc, json, DeserializationOption::Filter(filter));
     if (error)
@@ -308,6 +311,7 @@ bool SpotConn::parseInfo(String &json)
 
         return false;
     }
+    doc.shrinkToFit();
 
     JsonObject device = doc["device"];
     currentDevice.id = device["id"].as<String>();
@@ -326,9 +330,6 @@ bool SpotConn::parseInfo(String &json)
     currentSongPositionMs = doc["progress_ms"].as<float>();
 
     isPlaying = doc["is_playing"].as<bool>();
-
-    doc.garbageCollect();
-    doc.clear();
 
     return true;
 }
@@ -411,7 +412,7 @@ bool SpotConn::adjustVolume(int vol)
 {
     if (!currentDevice.id || currentDevice.isRestricted || !currentDevice.supportsVolume)
     {
-        log_e("No device or device is restricted or device doesn't support volume");
+        log_w("No device or device is restricted or device doesn't support volume");
         return false;
     }
 

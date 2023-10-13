@@ -1,5 +1,5 @@
-#define CORE_DEBUG_LEVEL 2 // 0: None, 1: Error, 2: Warning, 3: Info, 4: Debug, 5: Verbose
-#define CONFIG_ARDUHAL_LOG_COLORS 1
+#define CORE_DEBUG_LEVEL 5 // 0: None, 1: Error, 2: Warning, 3: Info, 4: Debug, 5: Verbose
+#define CONFIG_ARDUHAL_LOG_COLORS 0
 
 #include <Arduino.h>
 
@@ -160,8 +160,8 @@ void setup()
     log_d("Setting up authorization");
     currentStatus = INIT_AUTHORIZATION;
 
-    char savedRefreshToken[100];
-    char savedAccessToken[100];
+    char savedRefreshToken[255];
+    char savedAccessToken[255];
     nvsHandler.get("refreshToken", savedRefreshToken, sizeof(savedRefreshToken));
     nvsHandler.get("accessToken", savedAccessToken, sizeof(savedAccessToken));
 
@@ -441,11 +441,11 @@ void printUsages()
     // print used space in percent
     if (maxPSRAM > 0)
     {
-        log_e("Used PSRAM:  %.2f%%", (float)(maxPSRAM - freePSRAM) / maxPSRAM * 100);
+        log_e("Used PSRAM:      %.2f%%", (float)(maxPSRAM - freePSRAM) / maxPSRAM * 100);
         log_e("Max alloc PSRAM: %d kB", maxAllocPSRAM / 1024);
     }
-    log_e("Used Heap:   %.2f%%", (float)(maxHeap - freeHeap) / maxHeap * 100);
-    log_e("Max alloc Heap: %d kB", maxAllocHeap / 1024);
+    log_e("Used Heap:       %.2f%%", (float)(maxHeap - freeHeap) / maxHeap * 100);
+    log_e("Max alloc Heap:  %d kB", maxAllocHeap / 1024);
     // log_d("Used Sketch: %.2f%%", (float)(maxSketch - freeSketch) / maxSketch * 100);
     log_e("--------------------------------------------------------------------------------");
     log_e("Loop running on core %d", xPortGetCoreID());
