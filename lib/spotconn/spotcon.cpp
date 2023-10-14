@@ -344,6 +344,22 @@ bool SpotConn::getInfo()
 
     int httpsResponse = https.GET();
 
+    if (httpsResponse < 0)
+    {
+        log_e("HTTP GET error");
+
+        https.end();
+
+        log_e("WiFi status: %d", WiFi.status());
+        log_e("WiFi RSSI: %d", WiFi.RSSI());
+        log_e("WiFi channel: %d", WiFi.channel());
+        log_e("WiFi TX power: %d", WiFi.getTxPower());
+
+        WiFi.reconnect();
+
+        return false;
+    }
+
     bool success = false;
 
     switch (httpsResponse)
@@ -351,23 +367,25 @@ bool SpotConn::getInfo()
     case 200: // normal response
     {
         String response = https.getString();
-        https.end();
 
         success = parseInfo(response);
     }
     break;
-    case 204: // Playback not acailable or active
+    case 204: // Playback not available or active
         currentDevice = Device();
         currentSong = songDetails();
 
         success = true;
+
+        break;
     case 401: // Bad or expired token
     case 403: // Bad OAuth request
     case 429: // The app has exceeded its rate limits
     default:
-        https.end();
+        log_e("Response: %s", https.getString().c_str());
         lastError = httpsResponse;
     }
+    https.end();
 
     log_d("End");
     return success;

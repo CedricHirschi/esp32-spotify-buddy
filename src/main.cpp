@@ -1,6 +1,3 @@
-#define CORE_DEBUG_LEVEL 3          // What debug level to use for the logging (0: None, 1: Error, 2: Warning, 3: Info, 4: Debug, 5: Verbose)
-#define CONFIG_ARDUHAL_LOG_COLORS 1 // Set to 1 to enable colors in the logging
-
 #include <Arduino.h>
 
 #include <WiFiManager.h>
@@ -31,6 +28,8 @@
 #define CORE_TASK_SERVE 0
 #define CORE_TASK_REFRESH_SONG 1
 #define CORE_TASK_LOOP 1
+
+#define HTTP_SEMAPHORE_TICKS 200
 
 const char *savedClientID;
 const char *savedClientSecret;
@@ -134,7 +133,7 @@ void setup()
     savedClientID = nvsHandler.get("clientID");
     savedClientSecret = nvsHandler.get("clientSecret");
 
-    log_i("Connecting to WiFi");
+    log_d("Connecting to WiFi");
     currentStatus = INIT_WIFI;
 
     wifiManager.setDebugOutput(false);
@@ -183,13 +182,12 @@ void setup()
         savedRefreshToken[0] = '\0';
     }
 
-    if (!clientDefined())
+    if (clientDefined())
     {
         log_d("Found saved access and refresh tokens:");
-        log_d("%s / %s\n", savedAccessToken, savedRefreshToken);
-        log_d("sizes: %u / %u\n", strlen(savedAccessToken), strlen(savedRefreshToken));
+        // log_d("%s / %s", savedAccessToken, savedRefreshToken);
         log_d("Using client credentials:");
-        log_d("%s / %s\n", savedClientID, savedClientSecret);
+        log_d("%s / %s", savedClientID, savedClientSecret);
 
         spotconn.setTokens(savedAccessToken, savedRefreshToken);
         spotconn.setClientCredentials(savedClientID, savedClientSecret);
@@ -262,7 +260,7 @@ void setup()
     log_d("Set up refresh song task");
     currentStatus = DONE_SONG_REFRESH;
 
-    log_d("Setup done");
+    log_i("Setup done");
     currentStatus = DONE_SETUP;
 }
 
@@ -275,7 +273,7 @@ void loop()
         if (backwardButton.wasPressed())
         {
             log_d("backward button pressed");
-            if (xSemaphoreTake(httpMutex, 5000))
+            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
             {
                 spotconn.skipBack();
                 xSemaphoreGive(httpMutex);
@@ -284,7 +282,7 @@ void loop()
         else if (playButton.wasPressed())
         {
             log_d("play button pressed");
-            if (xSemaphoreTake(httpMutex, 5000))
+            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
             {
                 spotconn.togglePlay();
                 xSemaphoreGive(httpMutex);
@@ -293,7 +291,7 @@ void loop()
         else if (forwardButton.wasPressed())
         {
             log_d("forward button pressed");
-            if (xSemaphoreTake(httpMutex, 5000))
+            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
             {
                 spotconn.skipForward();
                 xSemaphoreGive(httpMutex);
@@ -306,7 +304,7 @@ void loop()
         if (abs(requestedVolume - spotconn.currVol) > 5)
         {
             log_d("adjusting volume from %d to %d", spotconn.currVol, requestedVolume);
-            if (xSemaphoreTake(httpMutex, 1000))
+            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
             {
                 spotconn.adjustVolume(requestedVolume);
                 xSemaphoreGive(httpMutex);
@@ -320,7 +318,7 @@ void loop()
 
             bool result = false;
 
-            if (xSemaphoreTake(httpMutex, 1000))
+            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
             {
                 result = spotconn.refreshAuth();
                 xSemaphoreGive(httpMutex);
@@ -535,15 +533,22 @@ void taskRefreshSong(void *pvParameters)
     {
         if (spotconn.accessTokenSet)
         {
-            log_d("Getting track info");
+            log_d("Getting info");
 
             bool status = false;
 
-            if (xSemaphoreTake(httpMutex, 1000))
+            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
             {
+                log_d("Took mutex");
                 status = spotconn.getInfo();
                 xSemaphoreGive(httpMutex);
             }
+            // else
+            // {
+            //     log_e("Failed to get info: Couldn't take mutex");
+            //     currentStatus = ERROR;
+            //     currentError = "Info Mutex";
+            // }
 
             if (status)
             {
@@ -565,7 +570,7 @@ void taskRefreshSong(void *pvParameters)
             }
             else
             {
-                log_e("Failed to get info");
+                log_e("Failed to get info: %d", spotconn.lastError);
                 currentStatus = ERROR;
                 currentError = "Failed to get info";
             }
