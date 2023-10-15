@@ -38,9 +38,12 @@ struct DebouncedButton
 
     bool wasPressed()
     {
-        bool result = pressed;
+        return pressed;
+    }
+
+    void acknowledge()
+    {
         pressed = false;
-        return result;
     }
 };
 

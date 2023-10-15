@@ -33,6 +33,12 @@
 #define POTENTIOMETER_FILTER_COEFFICIENT 0.9f // Between 0 (no change) and 1 (no filtering)
 // ========================================================
 
+// ERROR HANDLING
+// ========================================================
+#define HTTP_MUTEX_TIME 200  // Timeout for the HTTP mutex (in ms)
+#define GETINFO_MAX_FAILED 5 // How often the getinfo command is retried in a row before showing an error
+// ========================================================
+
 // LOCALIZATION
 // ========================================================
 #define UTC_OFFSET_S 7200    // UTC offset in seconds

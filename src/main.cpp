@@ -29,8 +29,6 @@
 #define CORE_TASK_REFRESH_SONG 1
 #define CORE_TASK_LOOP 1
 
-#define HTTP_SEMAPHORE_TICKS 200
-
 const char *savedClientID;
 const char *savedClientSecret;
 
@@ -273,28 +271,31 @@ void loop()
         if (backwardButton.wasPressed())
         {
             log_d("backward button pressed");
-            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
+            if (xSemaphoreTake(httpMutex, HTTP_MUTEX_TIME / portTICK_PERIOD_MS))
             {
                 spotconn.skipBack();
                 xSemaphoreGive(httpMutex);
+                backwardButton.acknowledge();
             }
         }
         else if (playButton.wasPressed())
         {
             log_d("play button pressed");
-            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
+            if (xSemaphoreTake(httpMutex, HTTP_MUTEX_TIME / portTICK_PERIOD_MS))
             {
                 spotconn.togglePlay();
                 xSemaphoreGive(httpMutex);
+                playButton.acknowledge();
             }
         }
         else if (forwardButton.wasPressed())
         {
             log_d("forward button pressed");
-            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
+            if (xSemaphoreTake(httpMutex, HTTP_MUTEX_TIME / portTICK_PERIOD_MS))
             {
                 spotconn.skipForward();
                 xSemaphoreGive(httpMutex);
+                forwardButton.acknowledge();
             }
         }
 
@@ -304,7 +305,7 @@ void loop()
         if (abs(requestedVolume - spotconn.currVol) > 5)
         {
             log_d("adjusting volume from %d to %d", spotconn.currVol, requestedVolume);
-            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
+            if (xSemaphoreTake(httpMutex, HTTP_MUTEX_TIME / portTICK_PERIOD_MS))
             {
                 spotconn.adjustVolume(requestedVolume);
                 xSemaphoreGive(httpMutex);
@@ -318,7 +319,7 @@ void loop()
 
             bool result = false;
 
-            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
+            if (xSemaphoreTake(httpMutex, 5 * HTTP_MUTEX_TIME / portTICK_PERIOD_MS))
             {
                 result = spotconn.refreshAuth();
                 xSemaphoreGive(httpMutex);
@@ -457,7 +458,7 @@ void printUsages()
     // log_d("Used Sketch: %.2f%%", (float)(maxSketch - freeSketch) / maxSketch * 100);
     log_v("--------------------------------------------------------------------------------");
     log_v("Loop running on core %d", xPortGetCoreID());
-
+    log_v("Core temperature: %.2f°C", temperatureRead());
     log_v("================================================================================");
 }
 
@@ -529,6 +530,8 @@ void taskDisplay(void *pvParameters)
 
 void taskRefreshSong(void *pvParameters)
 {
+    uint8_t failedTries = 0;
+
     while (true)
     {
         if (spotconn.accessTokenSet)
@@ -537,7 +540,7 @@ void taskRefreshSong(void *pvParameters)
 
             bool status = false;
 
-            if (xSemaphoreTake(httpMutex, HTTP_SEMAPHORE_TICKS))
+            if (xSemaphoreTake(httpMutex, HTTP_MUTEX_TIME / portTICK_PERIOD_MS))
             {
                 log_d("Took mutex");
                 status = spotconn.getInfo();
@@ -553,6 +556,7 @@ void taskRefreshSong(void *pvParameters)
             if (status)
             {
                 currentStatus = PLAYING_SONG;
+                failedTries = 0;
 
                 if (spotconn.currentSong.song == "")
                 {
@@ -570,10 +574,16 @@ void taskRefreshSong(void *pvParameters)
             }
             else
             {
-                log_e("Failed to get info: %d", spotconn.lastError);
-                currentStatus = ERROR;
-                currentError = "Failed to get info";
+                failedTries++;
+                log_w("Failed to get info: %d [%u]", spotconn.lastError, failedTries);
             }
+        }
+
+        if (failedTries > 5)
+        {
+            log_e("Failed to get info: %d [%u]", spotconn.lastError, failedTries);
+            currentStatus = ERROR;
+            currentError = "Failed to get info";
         }
 
         vTaskDelay(SONG_REFRESH_TIME / portTICK_PERIOD_MS);
