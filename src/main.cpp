@@ -178,25 +178,10 @@ void setup()
         log_d("No saved tokens found");
         savedAccessToken[0] = '\0';
         savedRefreshToken[0] = '\0';
-    }
 
-    if (clientDefined())
-    {
-        log_d("Found saved access and refresh tokens:");
-        // log_d("%s / %s", savedAccessToken, savedRefreshToken);
-        log_d("Using client credentials:");
-        log_d("%s / %s", savedClientID, savedClientSecret);
+        log_d("Starting auth server");
+        currentStatus = INIT_SERVER;
 
-        spotconn.setTokens(savedAccessToken, savedRefreshToken);
-        spotconn.setClientCredentials(savedClientID, savedClientSecret);
-        spotconn.accessTokenSet = true;
-
-        log_d("Refreshing auth");
-        spotconn.refreshAuth();
-        log_d("Auth refreshed");
-    }
-    else
-    {
         startMDNS();
 
         log_d("Starting auth server");
@@ -209,6 +194,8 @@ void setup()
         log_w(MDNS_ADDR_STR);
         log_w("in your browser to verify your Spotify account");
 
+        currentStatus = INIT_AUTHORIZATION;
+
         while (!spotconn.accessTokenSet)
         {
             server.handleClient();
@@ -216,14 +203,35 @@ void setup()
 
         log_d("Stopping auth server");
 
+        currentStatus = DONE_AUTHORIZATION;
+
         server.stop();
 
         NVSHandler nvsHandler;
         nvsHandler.set("accessToken", spotconn.accessToken.c_str());
         nvsHandler.set("refreshToken", spotconn.refreshToken.c_str());
 
+        strcpy(savedAccessToken, spotconn.accessToken.c_str());
+        strcpy(savedRefreshToken, spotconn.refreshToken.c_str());
+
         log_d("Saved access and refresh tokens:");
         log_d("%s / %s\n", spotconn.accessToken.c_str(), spotconn.refreshToken.c_str());
+    }
+
+    if (clientDefined())
+    {
+        log_d("Found saved access and refresh tokens:");
+        log_d("%s / %s", savedAccessToken, savedRefreshToken);
+        log_d("Using client credentials:");
+        log_d("%s / %s", savedClientID, savedClientSecret);
+
+        spotconn.setTokens(savedAccessToken, savedRefreshToken);
+        spotconn.setClientCredentials(savedClientID, savedClientSecret);
+        spotconn.accessTokenSet = true;
+
+        log_d("Refreshing auth");
+        spotconn.refreshAuth();
+        log_d("Auth refreshed");
     }
 
     log_d("Done authorizing");
@@ -489,7 +497,7 @@ void taskDisplay(void *pvParameters)
         case DONE_BUTTONS:
             u8g2.drawStr(0, 10, "Setup");
             u8g2.drawStr(0, 20, "Status:");
-            u8g2.drawStr(0, 30, STATUS_STR(currentStatus));
+            u8g2.drawStr(0, 30, currentStatusToString(currentStatus));
             break;
         case NOT_AUTHORIZED:
         case INIT_AUTHORIZATION:
