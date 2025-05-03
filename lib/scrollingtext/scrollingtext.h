@@ -2,17 +2,17 @@
 #define SCROLLINGTEXT_H
 
 #include <Arduino.h>
-#include <U8g2lib.h>
+#include <Adafruit_HX8357.h>
 
 class ScrollingText
 {
 public:
-    ScrollingText(U8G2 &display, int yPosition, unsigned displayRefreshRate, int pauseDuration = 1000, int scrollSpeed = 1);
+    ScrollingText(Adafruit_HX8357 &display, int yPosition, unsigned displayRefreshRate, int pauseDuration = 1000, int scrollSpeed = 10);
 
     void update(const String &newText);
 
 private:
-    U8G2 &display;
+    Adafruit_HX8357 &display;
     String currentText = "";
     int yPosition;
     unsigned displayRefreshRate;

@@ -6,9 +6,6 @@
 #include <NTPClient.h>
 #include <ESPmDNS.h>
 
-#include <U8g2lib.h>
-#include <SPI.h>
-
 #include "config.h"
 #define MDNS_ADDR_STR "http://" MDNS_HOSTNAME ".local"
 #include "status.h"
@@ -19,8 +16,9 @@
 #include "nvshandler.h"
 #include "scrollingtext.h"
 #include "timeformats.h"
+#include "picture.hpp"
 
-#define STACK_SIZE_DISPLAY 3000
+#define STACK_SIZE_DISPLAY 6000
 #define STACK_SIZE_REFRESH_SONG 6500
 #define STACK_SIZE_LOOP 8192
 
@@ -41,7 +39,7 @@ WiFiManager wifiManager;
 WiFiManagerParameter clientIDParameter("clientID", "Spotify clientID", "", 32);
 WiFiManagerParameter clientSecretParameter("clientSecret", "Spotify clientSecret", "", 32);
 
-U8G2_DISPLAY
+Adafruit_HX8357 display = Adafruit_HX8357(PIN_DISPLAY_CS, PIN_DISPLAY_DC, PIN_DISPLAY_RESET);
 DebouncedButton backwardButton(PIN_BACKWARD_BUTTON, BUTTON_DEBOUNCE_TIME);
 DebouncedButton playButton(PIN_PLAY_BUTTON, BUTTON_DEBOUNCE_TIME);
 DebouncedButton forwardButton(PIN_FORWARD_BUTTON, BUTTON_DEBOUNCE_TIME);
@@ -57,9 +55,11 @@ TaskHandle_t taskDisplayHandle = NULL;
 TaskHandle_t taskServeHandle = NULL;
 TaskHandle_t taskRefreshSongHandle = NULL;
 
-ScrollingText songName(u8g2, 10, DISPLAY_REFRESH_RATE);
-ScrollingText artistName(u8g2, 21, DISPLAY_REFRESH_RATE);
-ScrollingText albumName(u8g2, 31, DISPLAY_REFRESH_RATE);
+ScrollingText songName(display, 0, DISPLAY_REFRESH_RATE);
+ScrollingText artistName(display, 40, DISPLAY_REFRESH_RATE);
+ScrollingText albumName(display, 60, DISPLAY_REFRESH_RATE);
+
+Picture picture(LittleFS, 2);
 
 bool detectReset();
 void printUsages();
@@ -102,6 +102,8 @@ bool clientDefined()
 
 void setup()
 {
+    Serial.begin(115200);
+    log_d("Starting setup");
     if (detectReset())
     {
         log_w("Settings reset detected");
@@ -114,6 +116,16 @@ void setup()
         wifiManager.resetSettings();
 
         log_w("Erased all saved data");
+    }
+
+    if (!LittleFS.begin(true))
+    {
+        Serial.println("Failed to mount file system");
+
+        while (1)
+        {
+            delay(1000);
+        }
     }
 
     log_d("Setting up display task");
@@ -173,7 +185,7 @@ void setup()
 
     char savedRefreshToken[255];
     char savedAccessToken[255];
-    if (!nvsHandler.get("refreshToken", savedRefreshToken, sizeof(savedRefreshToken)) || !nvsHandler.get("accessToken", savedAccessToken, sizeof(savedAccessToken)))
+    if (!nvsHandler.get("refreshToken", savedRefreshToken, sizeof(savedRefreshToken)) || !nvsHandler.get("accessToken", savedAccessToken, sizeof(savedAccessToken)) || strcmp(savedRefreshToken, "null") == 0 || strcmp(savedAccessToken, "null") == 0 || strlen(savedRefreshToken) == 0 || strlen(savedAccessToken) == 0)
     {
         log_d("No saved tokens found");
         savedAccessToken[0] = '\0';
@@ -220,6 +232,7 @@ void setup()
 
     if (clientDefined())
     {
+
         log_d("Found saved access and refresh tokens:");
         log_d("%s / %s", savedAccessToken, savedRefreshToken);
         log_d("Using client credentials:");
@@ -363,57 +376,159 @@ void loop()
 
 bool detectReset()
 {
+#if PIN_RESET_ENABLED
     pinMode(PIN_RESET_SETTINGS, INPUT_PULLUP);
     delay(10);
     bool reset = digitalRead(PIN_RESET_SETTINGS) == PIN_RESET_ACTIVE;
     pinMode(PIN_RESET_SETTINGS, INPUT);
     return reset;
+#else
+    return false;
+#endif
 }
+
+String lastDate = "";
+String lastTime = "";
 
 void displayClock()
 {
+    log_v("Displaying clock");
     timeClient.update();
 
-    u8g2.setFont(u8g2_font_ncenB08_tr);
-    String date = formatCurrentDate(timeClient);
-    u8g2.setCursor((u8g2.getWidth() - u8g2.getStrWidth(date.c_str())) / 2, 10);
-    u8g2.println(date);
+    // u8g2.setFont(u8g2_font_ncenB08_tr);
+    // String date = formatCurrentDate(timeClient);
+    // u8g2.setCursor((u8g2.getWidth() - u8g2.getStrWidth(date.c_str())) / 2, 10);
+    // u8g2.println(date);
 
-    u8g2.setFont(u8g2_font_inb19_mf);
+    String date = formatCurrentDate(timeClient);
     String time = timeClient.getFormattedTime();
-    u8g2.setCursor((u8g2.getWidth() - u8g2.getStrWidth(time.c_str())) / 2, 45);
-    u8g2.println(time);
+
+    if (date != lastDate)
+    {
+        // log_v("Date changed to %s", date.c_str());
+        lastDate = date;
+        // redraw date
+        display.setTextSize(4);
+        display.setTextColor(HX8357_YELLOW);
+        int16_t x, y;
+        uint16_t w, h;
+        display.getTextBounds(date, 0, 0, &x, &y, &w, &h);
+        display.fillRect((display.width() - w) / 2, (display.height() - h) / 4, w, h, HX8357_BLACK);
+        display.setCursor((display.width() - w) / 2, (display.height() - h) / 4);
+        display.println(date);
+    }
+
+    if (time != lastTime)
+    {
+        // log_v("Time changed to %s", time.c_str());
+        lastTime = time;
+        // redraw time
+        display.setTextSize(6);
+        display.setTextColor(HX8357_WHITE);
+        int16_t x, y;
+        uint16_t w, h;
+        display.getTextBounds(time, 0, 0, &x, &y, &w, &h);
+        display.fillRect((display.width() - w) / 2, (display.height() - h) / 2, w, h, HX8357_BLACK);
+        display.setCursor((display.width() - w) / 2, (display.height() - h) / 2);
+        display.println(time);
+    }
+
+    // u8g2.setFont(u8g2_font_inb19_mf);
+    // String time = timeClient.getFormattedTime();
+    // u8g2.setCursor((u8g2.getWidth() - u8g2.getStrWidth(time.c_str())) / 2, 45);
+    // u8g2.println(time);
 }
+
+String previousSongId = "";
+String previousDeviceId = "";
 
 void displaySong()
 {
+    display.setTextSize(3);
+    display.setTextColor(HX8357_WHITE);
+
+    if (spotconn.currentSong.Id != previousSongId)
+    {
+        songName.update("");
+        artistName.update("");
+        albumName.update("");
+    }
+
     // print song name
-    u8g2.setFont(u8g2_font_ncenB08_tr);
+    // u8g2.setFont(u8g2_font_ncenB08_tr);
+    // songName.update(spotconn.currentSong.song);
+
     songName.update(spotconn.currentSong.song);
 
     // print artist and album name
-    u8g2.setFont(u8g2_font_PixelTheatre_te);
+    // u8g2.setFont(u8g2_font_PixelTheatre_te);
+    // artistName.update(spotconn.currentSong.artist);
+    // albumName.update(spotconn.currentSong.album);
+    display.setTextSize(2);
+    display.setTextColor(HX8357_CYAN);
     artistName.update(spotconn.currentSong.artist);
+    display.setTextColor(HX8357_MAGENTA);
     albumName.update(spotconn.currentSong.album);
 
     // print device name if available
-    if (spotconn.currentDevice.name != "")
+    if (spotconn.currentDevice.name != "" && spotconn.currentDevice.id != previousDeviceId)
     {
-        u8g2.setCursor(0, 43);
-        u8g2.printf("On '%s'", spotconn.currentDevice.name.c_str());
+        previousDeviceId = spotconn.currentDevice.id;
+        // u8g2.setCursor(0, 43);
+        // u8g2.printf("On '%s'", spotconn.currentDevice.name.c_str());
+        display.setTextSize(2);
+        display.setTextColor(HX8357_GREEN);
+        display.setCursor(0, display.height() - 60);
+        int16_t x, y;
+        uint16_t w, h;
+        display.getTextBounds("On '" + spotconn.currentDevice.name + "'", 0, 0, &x, &y, &w, &h);
+        display.fillRect(0, display.height() - 60, w, h, HX8357_BLACK);
+        display.setCursor(0, display.height() - 60);
+        display.println("On '" + spotconn.currentDevice.name + "'");
     }
 
     // print current time (left aligned) and duration (right aligned)
-    u8g2.setCursor(0, 55);
-    u8g2.printf("%s", formatSongTime(spotconn.currentSongPositionMs).c_str());
-    u8g2.setCursor(u8g2.getWidth() - u8g2.getStrWidth(formatSongTime(spotconn.currentSong.durationMs).c_str()), 55);
-    u8g2.printf("%s", formatSongTime(spotconn.currentSong.durationMs).c_str());
+    // u8g2.setCursor(0, 55);
+    // u8g2.printf("%s", formatSongTime(spotconn.currentSongPositionMs).c_str());
+    // u8g2.setCursor(u8g2.getWidth() - u8g2.getStrWidth(formatSongTime(spotconn.currentSong.durationMs).c_str()), 55);
+    // u8g2.printf("%s", formatSongTime(spotconn.currentSong.durationMs).c_str());
+    display.setTextSize(2);
+    display.setTextColor(HX8357_WHITE);
+    int16_t x, y;
+    uint16_t w, h;
+
+    display.getTextBounds(formatSongTime(spotconn.currentSongPositionMs), 0, 0, &x, &y, &w, &h);
+    display.fillRect(0, display.height() - 30, w, h, HX8357_BLACK);
+    display.setCursor(0, display.height() - 30);
+    display.println(formatSongTime(spotconn.currentSongPositionMs));
+
+    display.getTextBounds(formatSongTime(spotconn.currentSong.durationMs), 0, 0, &x, &y, &w, &h);
+    display.fillRect(display.width() - w, display.height() - 30, w, h, HX8357_BLACK);
+    display.setCursor(display.width() - w, display.height() - 30);
+    display.println(formatSongTime(spotconn.currentSong.durationMs));
 
     // draw progress bar
     float progress = spotconn.currentSongPositionMs / spotconn.currentSong.durationMs;
-    int barLength = u8g2.getWidth() * progress;
+    int barLength = display.width() * progress;
     int barHeight = 4;
-    u8g2.drawBox(0, u8g2.getHeight() - barHeight - 1, barLength, barHeight);
+    // u8g2.drawBox(0, u8g2.getHeight() - barHeight - 1, barLength, barHeight);
+    display.fillRect(0, display.height() - barHeight - 1, barLength, barHeight, HX8357_WHITE);
+    display.fillRect(barLength, display.height() - barHeight - 1, display.width() - barLength, barHeight, HX8357_BLACK);
+
+    if (spotconn.currentSong.Id != previousSongId)
+    {
+        previousSongId = spotconn.currentSong.Id;
+        if (picture.fetch(spotconn.currentSong.coverUrl, "cover.jpg", true))
+        {
+            log_d("Fetched cover");
+            display.fillRect((display.width() - 300 / 2) / 2, 100, 300, 300, HX8357_BLACK);
+            picture.display(&display, "cover.jpg", (display.width() - 300 / 2) / 2, 100);
+        }
+        else
+        {
+            log_e("Failed to fetch cover");
+        }
+    }
 
     // update song position
     if (spotconn.isPlaying)
@@ -472,64 +587,124 @@ void printUsages()
 
 void taskDisplay(void *pvParameters)
 {
-    SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI);
-    u8g2.begin();
-    u8g2.setContrast(0); // reduce brightness
-    u8g2.setFont(u8g2_font_ncenB08_tr);
+    // SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI);
+    // u8g2.begin();
+    // u8g2.setContrast(0); // reduce brightness
+    // u8g2.setFont(u8g2_font_ncenB08_tr);
+    display.begin();
+    display.setSPISpeed(40000000);
+    display.setRotation(1);
+    display.setTextWrap(false);
+
+    currentStatus_t lastStatus = NONE;
 
     while (true)
     {
         unsigned long displayLoopStartTime = millis();
-        u8g2.clearBuffer();
 
-        switch (currentStatus)
+        if ((currentStatus != NO_SONG) && (currentStatus != PLAYING_SONG))
         {
-        case NONE:
-        case DONE_WIFI:
-        case INIT_SERVER:
-        case DONE_SERVER:
-        case INIT_PINS:
-        case DONE_PINS:
-        case DONE_AUTHORIZATION:
-        case INIT_SONG_REFRESH:
-        case DONE_SONG_REFRESH:
-        case INIT_BUTTONS:
-        case DONE_BUTTONS:
-            u8g2.drawStr(0, 10, "Setup");
-            u8g2.drawStr(0, 20, "Status:");
-            u8g2.drawStr(0, 30, currentStatusToString(currentStatus));
-            break;
-        case NOT_AUTHORIZED:
-        case INIT_AUTHORIZATION:
-            u8g2.drawStr(0, 10, "Go to");
-            u8g2.drawStr(0, 20, MDNS_ADDR_STR);
-            u8g2.drawStr(0, 30, "in your browser");
-            u8g2.drawStr(0, 40, "to authorize Spotify");
-            break;
-        case INIT_WIFI:
-            u8g2.drawStr(0, 10, "Connect to WiFi");
-            u8g2.drawStr(0, 20, "'" MDNS_HOSTNAME " Setup'");
-            u8g2.drawStr(0, 30, "and go to");
-            u8g2.drawStr(0, 40, MDNS_ADDR_STR);
-            u8g2.drawStr(0, 50, "to set up WiFi");
-            if (!clientDefined())
-                u8g2.drawStr(0, 60, "and Spotify");
-            break;
-        case DONE_SETUP:
-        case NO_SONG:
-            displayClock();
-            break;
-        case PLAYING_SONG:
+            if (currentStatus != lastStatus)
+            {
+                log_d("Status changed to %s", currentStatusToString(currentStatus));
+                lastStatus = currentStatus;
+
+                // u8g2.clearBuffer();
+                display.fillScreen(HX8357_BLACK);
+                display.setTextColor(HX8357_WHITE);
+                display.setTextSize(2);
+
+                switch (currentStatus)
+                {
+                case NONE:
+                case DONE_WIFI:
+                case INIT_SERVER:
+                case DONE_SERVER:
+                case INIT_PINS:
+                case DONE_PINS:
+                case DONE_AUTHORIZATION:
+                case INIT_SONG_REFRESH:
+                case DONE_SONG_REFRESH:
+                case INIT_BUTTONS:
+                case DONE_BUTTONS:
+                    // u8g2.drawStr(0, 10, "Setup");
+                    // u8g2.drawStr(0, 20, "Status:");
+                    // u8g2.drawStr(0, 30, currentStatusToString(currentStatus));
+                    display.setCursor(0, 0);
+                    display.println("Setup");
+                    display.println("Status:");
+                    display.println(currentStatusToString(currentStatus));
+                    break;
+                case NOT_AUTHORIZED:
+                case INIT_AUTHORIZATION:
+                    // u8g2.drawStr(0, 10, "Go to");
+                    // u8g2.drawStr(0, 20, MDNS_ADDR_STR);
+                    // u8g2.drawStr(0, 30, "in your browser");
+                    // u8g2.drawStr(0, 40, "to authorize Spotify");
+                    display.setCursor(0, 0);
+                    display.println("Go to");
+                    display.println(MDNS_ADDR_STR);
+                    display.println("in your browser");
+                    display.println("to authorize Spotify");
+                    break;
+                case INIT_WIFI:
+                    // u8g2.drawStr(0, 10, "Connect to WiFi");
+                    // u8g2.drawStr(0, 20, "'" MDNS_HOSTNAME " Setup'");
+                    // u8g2.drawStr(0, 30, "and go to");
+                    // u8g2.drawStr(0, 40, MDNS_ADDR_STR);
+                    // u8g2.drawStr(0, 50, "to set up WiFi");
+                    // if (!clientDefined())
+                    //     u8g2.drawStr(0, 60, "and Spotify");
+                    display.setCursor(0, 0);
+                    display.println("Connect to WiFi");
+                    display.println("'" MDNS_HOSTNAME " Setup'");
+                    display.println("and go to");
+                    display.println(MDNS_ADDR_STR);
+                    display.println("to set up WiFi");
+                    if (!clientDefined())
+                        display.println("and Spotify");
+                    break;
+                case DONE_SETUP:
+                    displayClock();
+                    break;
+                case ERROR:
+                    // u8g2.setFont(u8g2_font_ncenB08_tr);
+                    // u8g2.drawStr(0, 10, "Error");
+                    // u8g2.drawStr(0, 20, currentError.c_str());
+                    display.setTextSize(2);
+                    display.setCursor(0, 0);
+                    display.println("Error");
+                    display.println(currentError);
+                    break;
+                }
+            }
+            // u8g2.sendBuffer();
+        }
+        else if (currentStatus == PLAYING_SONG)
+        {
+            if (currentStatus != lastStatus)
+            {
+                log_d("Status changed to %s", currentStatusToString(currentStatus));
+                lastStatus = currentStatus;
+                lastDate = "";
+                lastTime = "";
+                display.fillScreen(HX8357_BLACK);
+            }
             displaySong();
-            break;
-        case ERROR:
-            u8g2.setFont(u8g2_font_ncenB08_tr);
-            u8g2.drawStr(0, 10, "Error");
-            u8g2.drawStr(0, 20, currentError.c_str());
-            break;
+        }
+        else if (currentStatus == NO_SONG)
+        {
+            if (currentStatus != lastStatus)
+            {
+                log_d("Status changed to %s", currentStatusToString(currentStatus));
+                lastStatus = currentStatus;
+                previousSongId = "";
+                previousDeviceId = "";
+                display.fillScreen(HX8357_BLACK);
+            }
+            displayClock();
         }
 
-        u8g2.sendBuffer();
         unsigned long displayLoopEndTime = millis();
         if (displayLoopEndTime - displayLoopStartTime < 1000 / DISPLAY_REFRESH_RATE)
             vTaskDelay((1000 / DISPLAY_REFRESH_RATE - (displayLoopEndTime - displayLoopStartTime)) / portTICK_PERIOD_MS);

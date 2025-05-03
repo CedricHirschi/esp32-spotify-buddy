@@ -325,6 +325,7 @@ bool SpotConn::parseInfo(String &json)
     currentSong.artist = item["artists"][0]["name"].as<String>();
     currentSong.album = item["album"]["name"].as<String>();
     currentSong.durationMs = item["duration_ms"].as<int>();
+    currentSong.coverUrl = item["album"]["images"][1]["url"].as<String>();
 
     currentSongPositionMs = doc["progress_ms"].as<float>();
 

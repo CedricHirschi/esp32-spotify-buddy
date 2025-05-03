@@ -28,6 +28,7 @@ struct songDetails
     String artist;
     String song;
     String Id;
+    String coverUrl;
     bool isLiked;
 
     void print(void)

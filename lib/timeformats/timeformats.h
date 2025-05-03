@@ -38,7 +38,7 @@ String formatCurrentDate(NTPClient &timeClient)
     struct tm *timeinfo = localtime(&rawtime);
 
     String date = daysOfTheWeek[timeinfo->tm_wday];
-    date += ",  ";
+    date += ", ";
 
     if (timeinfo->tm_mday < 10)
         date += "0";
